@@ -546,50 +546,38 @@ obj.scale = (L/2, W/2, H/2)
 
 ---
 
+
 ## 📄 Lisensi
 
-**Internal use only.** Tidak untuk distribusi publik tanpa izin.
+Copyright (c) 2026 [Yus Rusnika]. All Rights Reserved.
+
+Proyek ini tersedia untuk **tujuan pembelajaran**. Anda boleh melihat, 
+mempelajari, dan mengambil inspirasi dari kode ini. Namun, Anda **tidak 
+diizinkan** untuk:
+- Mengklaim kode ini sebagai milik Anda
+- Menggunakannya untuk keperluan komersial
+- Mendistribusikan ulang tanpa izin
+
+Untuk pertanyaan tentang penggunaan, hubungi [yusrusnika84@gmail.com].
 
 ---
 
 ## 👥 Kontributor
 
-- **Yoesroes** — Pengembang utama
+- **Yus Rusnika** — Pengembang utama
 
 ---
 
 ## 📞 Kontak
 
 Untuk pertanyaan atau kolaborasi:
-- Email: [email@example.com]
-- GitHub: [@USERNAME](https://github.com/USERNAME)
+- Email: [yusrusnika84@gmail.com]
+- GitHub: [@USERNAME](https://github.com/yoesroes)
 
 ---
 
 **Terakhir diperbarui:** 3 Oktober 2026
-```
 
----
-
-## Cara Pakai
-
-1. **Buat file** `README.md` di root:
-   ```bash
-   cd ~/Sipil/baros_bridge
-   nano README.md
-   ```
-
-2. **Paste** isi di atas.
-
-3. **Ganti** `USERNAME` dan `email@example.com` dengan data Anda.
-
-4. **Save** (`Ctrl+O`, Enter, `Ctrl+X`).
-
-5. **Commit** ke Git:
-   ```bash
-   git add README.md
-   git commit -m "Add comprehensive README"
-   ```
 
 ---
 
@@ -610,4 +598,3 @@ Untuk pertanyaan atau kolaborasi:
 | Referensi | SNI, library, paper |
 | Lisensi | Internal use |
 
-**Jalankan `nano README.md`, paste, save.** Kirim konfirmasi.
