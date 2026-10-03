@@ -1,0 +1,9 @@
+openseespy>=3.5.0
+sectionproperties>=2.1.0
+ezdxf>=1.0.0
+numpy>=1.20
+scipy>=1.10
+matplotlib>=3.5
+shapely>=2.0
+triangle>=20220202
+cad-to-shapely>=0.5

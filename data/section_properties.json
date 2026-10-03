@@ -1,0 +1,11 @@
+{
+  "A_m2": 0.0053052326043336396,
+  "Ix_m4": 6.046712233842872e-07,
+  "Iy_m4": 1.3899192343230886e-05,
+  "J_m4": 1.5914302218272109e-06,
+  "cx_m": 0.042891407360000015,
+  "cy_m": 0.011834321428371914,
+  "scale_factor": 39.37,
+  "mesh_size_mm": 50.0,
+  "dxf_path": "/home/yoesroes/Sipil/baros/Source/DXF/Penampang_tipikal.dxf"
+}

@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# File besar
+og
+*.dxf
+*.dwg
+*.ecw
+*.FCStd
+*.FCStd1
+*.FCStd2
+
+# Log & dump
+*.log
+*_dump.txt
+api_dump.txt
+help_og.txt
+model_dump.txt
+
+# Output
+output/
+*.out
+
+# Temp & raw
+Temp/
+Raw source/
+
+# Output gambar
+*.png
+*.jpg
+*.jpeg
