@@ -31,7 +31,7 @@ import sys
 # hollow: estimasi proporsional (warping segfault)
 J_VALUES = {
     "solid":   3.8232,    # dari tipikal
-    "hollow":  3.5840,    # estimasi proporsional
+    "hollow":  3.7537,    # dari warping CGS
     "tumpuan": 3.1660,    # dari tumpuan
 }
 
