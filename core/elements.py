@@ -329,7 +329,7 @@ if __name__ == "__main__":
     ops.model('basic', '-ndm', 3, '-ndf', 6)
     
     # Buat node
-    node_result = nodes.buat_semua_node(pdata.SECTION_MAP)
+    node_result = nodes.buat_semua_node(pdata.SECTION_MAP, pdata.SUPPORTS)
     
     # Buat elemen
     elemen_result = buat_semua_elemen(
