@@ -1,15 +1,3 @@
-# README.md 
-
-Buat file `README.md` di root folder `~/Sipil/baros_bridge/`:
-
-```bash
-cd ~/Sipil/baros_bridge
-nano README.md
-```
-
-Paste isi berikut:
-
----
 
 ```markdown
 # Jembatan Baros — Analisis Struktur Jembatan 9 Bentang
@@ -19,7 +7,7 @@ Paste isi berikut:
 [![OpenSeesPy](https://img.shields.io/badge/OpenSeesPy-3.5+-green)]()
 [![FreeCAD](https://img.shields.io/badge/FreeCAD-1.1.3-orange)]()
 
-Analisis struktur jembatan beton bertulang dengan **9 bentang**, **8 pier**, dan **2 abutment** menggunakan OpenSeesPy. Proyek ini mencakup ekstraksi data dari DXF, visualisasi 3D, dan analisis struktur.
+Analisis struktur jembatan flyover beton bertulang dengan **9 bentang**, **8 pier**, dan **2 abutment** menggunakan OpenSeesPy. Proyek ini mencakup ekstraksi data dari DXF, visualisasi 3D, dan analisis struktur.
 
 ---
 
@@ -33,6 +21,7 @@ Analisis struktur jembatan beton bertulang dengan **9 bentang**, **8 pier**, dan
 - [Cara Pakai](#cara-pakai)
 - [Alur Analisis](#alur-analisis)
 - [Data yang Sudah Diekstrak](#data-yang-sudah-diekstrak)
+- [Modul Core](#modul-core)
 - [Tools & Library](#tools--library)
 - [Status Pengembangan](#status-pengembangan)
 - [Referensi](#referensi)
@@ -116,45 +105,66 @@ Deck → Bearing → Pier Head → Pier → Pile Cap → Bored Pile → Tanah
 ## 📁 Struktur Folder
 
 ```
-Baros_bridge/
+baros_bridge/
 ├── README.md
 ├── .gitignore
 ├── requirements.txt
 │
-├── Clean/                          # Script final
-│   ├── project_data.py             # Data lengkap proyek
-│   ├── deck_9span_analysis.py      # Analisis deck 9 bentang
+├── Clean/                          # Data & script final
+│   ├── project_data.py             # SINGLE SOURCE OF TRUTH
+│   ├── plot_mapping.py             # Plot mapping penampang
 │   └── ...
 │
+├── core/                           # Modul inti
+│   ├── loads.py                    # Beban (SNI 1725)
+│   ├── materials.py                # Material
+│   ├── sections.py                 # Section
+│   ├── nodes.py                    # Node grillage
+│   ├── elements.py                 # Elemen grillage
+│   ├── boundary_condition.py       # BC
+│   ├── analysis.py                 # Analisis (next)
+│   ├── output.py                   # Output (next)
+│   │
+│   ├── confinement.py              # Mander (pier)
+│   ├── rebar_layout.py             # Rebar (pier)
+│   └── bridge.py                   # Orchestrator
+│
+├── components/                     # Komponen struktur
+│   ├── box_girder.py               # Box girder
+│   ├── pier_head.py                # Pier head
+│   ├── pier.py                     # Pier
+│   ├── pile_cap.py                 # Pile cap
+│   └── bored_pile.py               # Bored pile
+│
 ├── Temp/                           # Script eksperimen
-│   ├── extract_tumpuan.py          # Ekstrak penampang tumpuan
-│   ├── extract_hollow_net.py       # Ekstrak penampang hollow
-│   ├── extract_blockout.py         # Ekstrak penampang blockout
-│   ├── extract_pier_final.py       # Ekstrak penampang pier
-│   ├── extract_profil.py           # Ekstrak profil memanjang
-│   ├── generate_section_map.py     # Generate mapping penampang
-│   ├── freecad_jembatan2.py        # Visualisasi FreeCAD
+│   ├── extract_*.py                # Ekstraksi DXF
+│   ├── hitung_J*.py                # Hitung J
+│   ├── fix_hollow*.py              # Perbaiki DXF
+│   ├── freecad_*.py                # Visualisasi FreeCAD
 │   └── ...
 │
 ├── output/                         # Output
+│   ├── loads_output.txt            # Output beban
+│   ├── loads_output.csv            # Output beban (CSV)
+│   ├── loads_garis.csv             # Output beban per garis
+│   ├── section_J.json              # Nilai J
 │   ├── jembatan_freecad2.FCStd     # Model 3D FreeCAD
-│   ├── reaksi_deck_9span.json      # Reaksi per support
-│   └── screenshots/                # Screenshot visualisasi
+│   └── screenshots/                # Screenshot
 │
-├── data/
-│   └── DXF/                        # File DXF (tidak di-commit)
-│       ├── Penampang_tipikal.dxf
-│       ├── Penampang_hollow.dxf
-│       ├── Penampang_blockout.dxf
-│       ├── Penampang_tumpuan.dxf
-│       ├── penampang_pier_tipikal.dxf
-│       ├── potongan_memanjang.dxf
-│       └── ...
+├── archive/
+│   └── legacy/                     # File lama (tidak dipakai)
+│       ├── section_mapping.py
+│       ├── support_data.py
+│       └── section_properties.py
 │
-└── docs/                           # Dokumentasi
-    ├── data_summary.md
-    ├── mapping_penampang.md
-    └── hasil_analisis.md
+├── docs/                           # Dokumentasi
+│   ├── CHANGELOG.md
+│   └── Catatan perubahan.md
+│
+└── data/
+    └── DXF/                        # File DXF (tidak di-commit)
+        ├── scaled/                 # DXF scaled (×39.37)
+        └── ...
 ```
 
 ---
@@ -190,7 +200,7 @@ cad-to-shapely>=0.5
 ### 1. Clone Repository
 
 ```bash
-git clone https://github.com/USERNAME/baros_bridge.git
+git clone https://github.com/yoesroes/baros_bridge.git
 cd baros_bridge
 ```
 
@@ -241,8 +251,6 @@ python3 extract_pier_final.py
 python3 extract_profil.py
 ```
 
-**Output:** Properti penampang (A, Ix, Iy) untuk tiap tipe.
-
 ### B. Generate Mapping Penampang
 
 ```bash
@@ -251,16 +259,12 @@ python3 generate_section_map.py
 python3 merge_section_map.py
 ```
 
-**Output:** `SECTION_MAP` (38 segmen).
-
 ### C. Visualisasi 3D (FreeCAD)
 
 ```bash
 cd Temp
 ~/Desktop/FreeCAD.AppImage --console freecad_jembatan2.py
 ```
-
-**Output:** `output/jembatan_freecad2.FCStd`
 
 **Buka di GUI:**
 ```bash
@@ -270,11 +274,26 @@ cd Temp
 ### D. Analisis Struktur (OpenSeesPy)
 
 ```bash
-cd Clean
-python3 deck_9span_analysis.py
-```
+cd core
 
-**Output:** `output/reaksi_deck_9span.json`
+# Step 1: Beban
+python3 loads.py
+
+# Step 2: Material
+python3 materials.py
+
+# Step 3: Section
+python3 sections.py
+
+# Step 4: Node
+python3 nodes.py
+
+# Step 5: Elemen
+python3 elements.py
+
+# Step 6: BC
+python3 boundary_condition.py
+```
 
 ### E. Verifikasi Data
 
@@ -300,17 +319,15 @@ print('Total panjang:', pd.INFO['panjang_total'], 'm')
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  1. EKSTRAKSI DATA DARI DXF                             │
-│     - Penampang box (tipikal, hollow, blockout, tumpuan)│
+│     - Penampang box (tipikal, hollow, tumpuan)          │
 │     - Penampang pier                                     │
 │     - Profil memanjang (posisi & elevasi support)        │
-│     - Koordinat bearing                                  │
 └──────────────────────┬──────────────────────────────────┘
                        │
                        ▼
 ┌─────────────────────────────────────────────────────────┐
 │  2. PERHITUNGAN PROPERTI PENAMPANG                      │
 │     - A, Ix, Iy, J dengan sectionproperties             │
-│     - Verifikasi dengan perhitungan manual               │
 └──────────────────────┬──────────────────────────────────┘
                        │
                        ▼
@@ -327,7 +344,7 @@ print('Total panjang:', pd.INFO['panjang_total'], 'm')
 │  4. VISUALISASI 3D                                      │
 │     - Deck, pier head, pier, abutment                    │
 │     - Stopper & bearing                                  │
-│     - FreeCAD / Blender                                  │
+│     - FreeCAD                                            │
 └──────────────────────┬──────────────────────────────────┘
                        │
                        ▼
@@ -355,11 +372,16 @@ print('Total panjang:', pd.INFO['panjang_total'], 'm')
 
 ### 1. Penampang Box Girder
 
-| Tipe | A (m²) | Ix (m⁴) | Iy (m⁴) | Keterangan |
-|------|--------|---------|---------|------------|
-| **Solid** | 8.2231 | 1.4527 | 33.3927 | Transisi (tipikal) |
-| **Hollow** | 7.7072 | 1.4392 | 32.8489 | Tengah bentang |
-| **Tumpuan** | 7.9670 | 1.2986 | 33.3759 | Diafragma |
+| Tipe | A (m²) | Ix (m⁴) | Iy (m⁴) | J (m⁴) | Sumber J |
+|------|--------|---------|---------|--------|----------|
+| **Solid** | 8.2231 | 1.4527 | 33.3927 | 3.8232 | Warping |
+| **Hollow** | 7.7072 | 1.4392 | 32.8489 | 3.5840 | Estimasi |
+| **Tumpuan** | 7.9670 | 1.2986 | 33.3759 | 3.1660 | Warping |
+
+**Catatan:**
+- Ix = momen inersia terhadap sumbu **vertikal** (lentur vertikal)
+- Iy = momen inersia terhadap sumbu **lateral** (lentur lateral)
+- J = konstanta torsi
 
 ### 2. Penampang Pier
 
@@ -408,86 +430,66 @@ print('Total panjang:', pd.INFO['panjang_total'], 'm')
 
 | Parameter | Nilai | Satuan |
 |-----------|-------|--------|
-| E (modulus elastis) | 30 × 10⁶ | kPa |
-| G (modulus geser) | 12.5 × 10⁶ | kPa |
-| f'c (beton) | 35 × 10³ | kPa |
-| fy (baja) | 420 × 10³ | kPa |
-| γ (berat jenis) | 24.0 | kN/m³ |
+| E box | 30.27 × 10⁶ | kPa |
+| E pier | 25.74 × 10⁶ | kPa |
+| f'c box | 41.5 | MPa |
+| f'c pier | 30 | MPa |
+| fy | 420 | MPa |
+| γ beton | 22.913 | kN/m³ |
+
+### 7. Beban (SNI 1725:2016)
+
+| Komponen | Nilai | Satuan |
+|----------|-------|--------|
+| BTR | 65.25 | kN/m |
+| KEL | 497.35 | kN |
+| w aspal | 14.85 | kN/m |
+| w air | 0.45 | kN/m |
+| w barrier | 11.33 | kN/m |
+| w non-struktur | 26.63 | kN/m |
+
+---
+
+## 🧩 Modul Core
+
+| Modul | Fungsi | Status |
+|-------|--------|:------:|
+| `loads.py` | Beban (SNI 1725) | ✅ |
+| `materials.py` | Material | ✅ |
+| `sections.py` | Section | ✅ |
+| `nodes.py` | Node grillage (240) | ✅ |
+| `elements.py` | Elemen grillage (346) | ✅ |
+| `boundary_condition.py` | BC (50 node) | ✅ |
+| `analysis.py` | Analisis | ⏳ |
+| `output.py` | Output | ⏳ |
+| `confinement.py` | Mander (pier) | ✅ |
+| `rebar_layout.py` | Rebar (pier) | ✅ |
+
+### Model Grillage
+
+| Item | Nilai |
+|------|:-----:|
+| Tipe | Grillage 3D |
+| Node | 240 (48 x × 5 z) |
+| Elemen memanjang | 235 |
+| Elemen melintang | 192 |
+| Total elemen | 427 |
+| Section | Bervariasi per segmen |
+| BC | 50 node di-fix (10 support × 5) |
 
 ---
 
 ## 🛠️ Tools & Library
 
-### 1. OpenSeesPy
+### 1. OpenSeesPy — Analisis struktur
 
-**Fungsi:** Analisis struktur nonlinear.
+### 2. sectionproperties — Properti penampang dari DXF
 
-```python
-import openseespy.opensees as ops
+### 3. ezdxf — Baca/tulis DXF
 
-ops.model('basic', '-ndm', 3, '-ndf', 6)
-ops.node(1, 0, 0, 0)
-ops.element('elasticBeamColumn', 1, 1, 2, A, E, G, J, Iy, Iz, 1)
-ops.analyze(1)
-```
+### 4. FreeCAD — Visualisasi 3D
 
-### 2. sectionproperties
-
-**Fungsi:** Hitung properti penampang dari DXF.
-
-```python
-from sectionproperties.pre import Geometry
-from sectionproperties.analysis import Section
-
-geom = Geometry.from_dxf("penampang.dxf")
-geom.create_mesh(mesh_sizes=[200])
-sec = Section(geometry=geom)
-sec.calculate_geometric_properties()
-
-A = sec.get_area()
-Ix, Iy, Ixy = sec.get_ic()
-```
-
-### 3. ezdxf
-
-**Fungsi:** Baca/tulis file DXF.
-
-```python
-import ezdxf
-
-doc = ezdxf.readfile("file.dxf")
-msp = doc.modelspace()
-
-for entity in msp:
-    print(entity.dxftype(), entity.dxf.layer)
-```
-
-### 4. FreeCAD
-
-**Fungsi:** Visualisasi 3D.
-
-```python
-import FreeCAD as App
-import Part
-
-doc = App.newDocument("Jembatan")
-box = Part.makeBox(L, W, H)
-obj = doc.addObject("Part::Feature", "Deck")
-obj.Shape = box
-```
-
-### 5. Blender 2.79b
-
-**Fungsi:** Visualisasi 3D alternatif.
-
-```python
-import bpy
-import math
-
-bpy.ops.mesh.primitive_cube_add(location=(0, 0, 0))
-obj = bpy.context.active_object
-obj.scale = (L/2, W/2, H/2)
-```
+### 5. Blender 2.79b — Visualisasi alternatif
 
 ---
 
@@ -495,7 +497,7 @@ obj.scale = (L/2, W/2, H/2)
 
 ### Selesai ✅
 
-- [x] Ekstrak properti penampang box (4 tipe)
+- [x] Ekstrak properti penampang box (3 tipe)
 - [x] Ekstrak penampang pier
 - [x] Ekstrak posisi & elevasi support
 - [x] Ekstrak tinggi pier
@@ -504,10 +506,17 @@ obj.scale = (L/2, W/2, H/2)
 - [x] Mapping penampang sepanjang jembatan (38 segmen)
 - [x] Visualisasi 3D (FreeCAD)
 - [x] Data lengkap di `project_data.py`
+- [x] **Step 1: Modul beban** (`loads.py`)
+- [x] **Step 2: Material** (`materials.py`)
+- [x] **Step 3: Section** (`sections.py`)
+- [x] **Step 4: Node** (`nodes.py` — 240 node)
+- [x] **Step 5: Elemen** (`elements.py` — 346 elemen)
+- [x] **Step 6: BC** (`boundary_condition.py` — 50 node)
 
 ### Dalam Proses ⏳
 
-- [ ] Analisis struktur dengan OpenSeesPy
+- [ ] **Step 7: Analisis** (`analysis.py`)
+- [ ] **Step 8: Output** (`output.py`)
 - [ ] Hitung reaksi per support
 - [ ] Verifikasi keseimbangan gaya (reaksi = beban)
 
@@ -520,7 +529,7 @@ obj.scale = (L/2, W/2, H/2)
 - [ ] Analisis pushover
 - [ ] Analisis jembatan melengkung (trase huruf C)
 - [ ] Analisis superelevasi
-- [ ] Analisis penampang bervariasi (blockout, diafragma)
+- [ ] Pattern loading
 
 ---
 
@@ -546,13 +555,12 @@ obj.scale = (L/2, W/2, H/2)
 
 ---
 
-
 ## 📄 Lisensi
 
-Copyright (c) 2026 [Yus Rusnika]. All Rights Reserved.
+Copyright (c) 2026 Yus Rusnika. All Rights Reserved.
 
-Proyek ini tersedia untuk **tujuan pembelajaran**. Anda boleh melihat, 
-mempelajari, dan mengambil inspirasi dari kode ini. Namun, Anda **tidak 
+Proyek ini tersedia untuk **tujuan pembelajaran**. Anda boleh melihat,
+mempelajari, dan mengambil inspirasi dari kode ini. Namun, Anda **tidak
 diizinkan** untuk:
 - Mengklaim kode ini sebagai milik Anda
 - Menggunakannya untuk keperluan komersial
@@ -571,30 +579,11 @@ Untuk pertanyaan tentang penggunaan, hubungi [yusrusnika84@gmail.com].
 ## 📞 Kontak
 
 Untuk pertanyaan atau kolaborasi:
-- Email: [yusrusnika84@gmail.com]
-- GitHub: [@USERNAME](https://github.com/yoesroes)
+- Email: yusrusnika84@gmail.com
+- GitHub: [@yoesroes](https://github.com/yoesroes)
 
 ---
 
-**Terakhir diperbarui:** 3 Oktober 2026
-
-
----
-
-## Ringkasan
-
-| Bagian | Isi |
-|--------|-----|
-| Deskripsi | Filosofi analisis |
-| Data | Support, span, EJ |
-| Struktur | Folder |
-| Requirements | Software & library |
-| Instalasi | Clone, venv, install |
-| Cara Pakai | Ekstrak, generate, visualisasi, analisis |
-| Alur | Diagram |
-| Data Diekstrak | Tabel lengkap |
-| Tools | OpenSeesPy, sectionproperties, dll. |
-| Status | Selesai, dalam proses, belum |
-| Referensi | SNI, library, paper |
-| Lisensi | Internal use |
+**Terakhir diperbarui:** 5 Oktober 2026
+```
 
