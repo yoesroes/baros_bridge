@@ -7,7 +7,19 @@ ConfinementModel - Model kekangan beton berdasarkan:
 Mendukung:
 - Circular section (spiral / circular hoop)
 - Rectangular section (rectangular hoop + cross ties)
-- Perhitungan f'cc, εc0, εcu, dan kurva tegangan-regangan penuh
+- Perhitungan f'cc, epsc0, epscu, dan kurva tegangan-regangan penuh
+
+Perbaikan dibanding versi sebelumnya:
+- ManderConcrete.define_cover: tegangan residual tidak lagi terbalik tanda
+  dan parameter `lambda` (rat) Concrete02 sekarang dikirim.
+- Rectangular: rho_x memakai dimensi core yang benar (rho_x = Asx/(s*dc),
+  rho_y = Asy/(s*bc)); rho_s = rho_x + rho_y (bukan rata-rata);
+  ke memakai rumus Mander lengkap (suku in-plane arching + kedua arah s').
+- Spasi sengkang hanya satu nilai (s). sx dan sy dipertahankan sebagai
+  argumen, tetapi harus sama.
+- Circular: pilihan spiral / hoop (hoop memakai kuadrat faktor s').
+- rho_cc dapat dihitung otomatis dari jumlah tulangan longitudinal (n_long).
+- Guard pada stress() dan normalisasi tanda input.
 """
 
 import math
@@ -35,17 +47,34 @@ class ManderConfinement:
         self.fyh = fyh
         self.esm = esm
         if Ec is None:
-            # ACI 318: Ec = 4700 * sqrt(f'c) [MPa]
             fc_MPa = self.fpc / 1000.0
             self.Ec = 4700.0 * math.sqrt(fc_MPa) * 1000.0  # kPa
         else:
             self.Ec = Ec
 
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _rho_cc(rho_cc, n_long, db_long, Ac):
+        """
+        Rasio tulangan longitudinal terhadap luas core.
+        Prioritas: rho_cc eksplisit > dihitung dari n_long > 0.
+        """
+        if rho_cc is not None:
+            val = rho_cc
+        elif n_long is not None:
+            val = n_long * math.pi * db_long ** 2 / 4.0 / Ac
+        else:
+            val = 0.0
+        if not 0.0 <= val < 1.0:
+            raise ValueError("rho_cc harus 0 <= rho_cc < 1, didapat "
+                             "{:.4f}".format(val))
+        return val
+
     # ==================================================================
     # CIRCULAR SECTION
     # ==================================================================
     def circular(self, D, cover, db_long, db_hoop, s,
-                 n_hoop_bars=1, rho_cc=None):
+                 n_hoop_bars=1, rho_cc=None, n_long=None, spiral=True):
         """
         Hitung parameter kekangan untuk penampang lingkaran.
 
@@ -60,49 +89,51 @@ class ManderConfinement:
         db_hoop : float
             Diameter tulangan sengkang spiral/hoop (m).
         s : float
-            Spasi sengkang spiral/hoop (m).
+            Spasi sengkang spiral/hoop, as ke as (m).
         n_hoop_bars : int
             Jumlah bar sengkang pada penampang melintang (=1 untuk spiral).
         rho_cc : float, optional
             Rasio tulangan longitudinal terhadap luas core.
-            Jika None, hanya confinement effect yang dihitung.
+        n_long : int, optional
+            Jumlah tulangan longitudinal. Dipakai menghitung rho_cc bila
+            rho_cc tidak diberikan. Jika keduanya None -> rho_cc = 0
+            (ke sedikit overestimate).
+        spiral : bool
+            True: spiral (faktor 1 - s'/2ds).
+            False: hoop tertutup (faktor kuadrat).
 
         Returns
         -------
         dict dengan keys: fcc, epsc0, epcu, fl, ke, rho_s, ...
         """
-        # Diameter core (ke tengah sengkang)
-        Dc = D - 2.0 * cover - db_hoop
+        Dc = D - 2.0 * cover - db_hoop          # diameter core (as sengkang)
+        if Dc <= 0:
+            raise ValueError("Diameter core <= 0; cek D, cover, db_hoop.")
         Ac = math.pi * Dc ** 2 / 4.0
-        Acc = Ac  # circular: Ac = Acc
 
-        # Rasio volumetrik sengkang
-        # Asp = luas 1 bar sengkang
         Asp = math.pi * db_hoop ** 2 / 4.0
         rho_s = 4.0 * Asp * n_hoop_bars / (Dc * s)
 
-        # Confinement effectiveness coefficient
-        # ke = (1 - s'/(2*Dc)) / (1 - rho_cc)   ; s' = clear spacing
-        s_prime = s - db_hoop
-        rho_cc_val = rho_cc if rho_cc is not None else 0.0
-        if rho_cc_val >= 1.0:
-            rho_cc_val = 0.0
-        ke = (1.0 - s_prime / (2.0 * Dc)) / (1.0 - rho_cc_val)
+        s_prime = s - db_hoop                   # jarak bersih
+        if s_prime < 0:
+            raise ValueError("Spasi s lebih kecil dari diameter sengkang.")
+        rho_cc_val = self._rho_cc(rho_cc, n_long, db_long, Ac)
+        Acc = Ac * (1.0 - rho_cc_val)
 
-        # Effective lateral confining pressure
-        fl = 0.5 * ke * rho_s * self.fyh   # kPa
+        faktor = 1.0 - s_prime / (2.0 * Dc)
+        if not spiral:
+            faktor = faktor ** 2
+        ke = faktor / (1.0 - rho_cc_val)
 
-        # Confined strength
+        fl = 0.5 * ke * rho_s * self.fyh         # kPa
         fcc = self._fcc_from_fl(fl)
-
-        # Strains
         epsc0 = self._epsc0(fcc)
         epcu = self._epcu(fcc, rho_s)
 
         return {
             'section': 'circular',
             'D': D, 'Dc': Dc, 'Ac': Ac, 'Acc': Acc,
-            'rho_s': rho_s, 'ke': ke, 'fl': fl,
+            'rho_s': rho_s, 'rho_cc': rho_cc_val, 'ke': ke, 'fl': fl,
             'fcc': fcc, 'epsc0': epsc0, 'epcu': epcu,
             'Ec': self.Ec,
             'fpc': self.fpc,
@@ -112,9 +143,10 @@ class ManderConfinement:
     # RECTANGULAR SECTION
     # ==================================================================
     def rectangular(self, bx, hy, cover, db_long, db_hoop,
-                    sx, sy, n_x=2, n_y=2, rho_cc=None):
+                    sx, sy, n_x=2, n_y=2, rho_cc=None, n_long=None,
+                    w_clear=None):
         """
-        Hitung parameter kekangan untuk penampang persegi.
+        Hitung parameter kekangan untuk penampang persegi (Mander 1988).
 
         Parameters
         ----------
@@ -128,63 +160,74 @@ class ManderConfinement:
             Diameter tulangan longitudinal (m).
         db_hoop : float
             Diameter tulangan sengkang (m).
-        sx : float
-            Spasi sengkang arah-x (m).
-        sy : float
-            Spasi sengkang arah-y (m).
+        sx, sy : float
+            Spasi sengkang sepanjang sumbu elemen (as ke as, m).
+            Dalam model Mander hanya ada satu spasi, jadi sx harus = sy.
         n_x : int
-            Jumlah area tulangan longitudinal yang ditahan di sisi-x.
+            Jumlah kaki sengkang (hoop + cross tie) yang SEJAJAR sumbu-x.
+            Sengkang tunggal = 2.
         n_y : int
-            Jumlah area tulangan longitudinal yang ditahan di sisi-y.
+            Jumlah kaki sengkang yang SEJAJAR sumbu-y. Sengkang tunggal = 2.
         rho_cc : float, optional
             Rasio tulangan longitudinal terhadap luas core.
+        n_long : int, optional
+            Jumlah tulangan longitudinal (dipakai bila rho_cc None).
+        w_clear : sequence of float, optional
+            Jarak bersih (m) antar tulangan longitudinal yang tertahan
+            sengkang/cross tie, keliling core. Dipakai untuk suku
+            in-plane arching: 1 - sum(w'^2)/(6*bc*dc).
+            Jika None, suku tersebut diabaikan (ke sedikit overestimate).
 
         Returns
         -------
-        dict dengan keys: fcc_x, fcc_y, fcc, epsc0, epcu, ...
+        dict dengan keys: fcc, flx, fly, epsc0, epcu, ke, ...
+
+        Catatan
+        -------
+        f'l ekuivalen untuk f'lx != f'ly di sini disederhanakan dengan
+        akar perkalian (sqrt(flx*fly)). Mander sebenarnya memakai
+        permukaan keruntuhan lima-parameter (William-Warnke).
         """
-        # Dimensi core (ke tengah sengkang)
-        bc = bx - 2.0 * cover - db_hoop
-        hc = hy - 2.0 * cover - db_hoop
+        if abs(sx - sy) > 1e-9:
+            raise ValueError(
+                "Model Mander memakai satu spasi sengkang; sx ({}) harus "
+                "sama dengan sy ({}).".format(sx, sy))
+        s = sx
+
+        bc = bx - 2.0 * cover - db_hoop          # lebar core (arah x)
+        hc = hy - 2.0 * cover - db_hoop          # tinggi core (arah y) = dc
+        if bc <= 0 or hc <= 0:
+            raise ValueError("Dimensi core <= 0; cek bx, hy, cover.")
         Ac = bc * hc
-        Acc = Ac
 
-        # Luas 1 bar sengkang
         Asp = math.pi * db_hoop ** 2 / 4.0
+        s_prime = s - db_hoop
+        if s_prime < 0:
+            raise ValueError("Spasi s lebih kecil dari diameter sengkang.")
 
-        # Rasio volumetrik sengkang
-        rho_x = Asp * n_x / (bc * sx)   # sumbu-x
-        rho_y = Asp * n_y / (hc * sy)   # sumbu-y
+        # Mander: rho_x = Asx/(s*dc), rho_y = Asy/(s*bc)
+        rho_x = Asp * n_x / (s * hc)
+        rho_y = Asp * n_y / (s * bc)
 
-        # Effective confinement coefficient (sama untuk kedua arah)
-        rho_cc_val = rho_cc if rho_cc is not None else 0.0
-        if rho_cc_val >= 1.0:
-            rho_cc_val = 0.0
+        rho_cc_val = self._rho_cc(rho_cc, n_long, db_long, Ac)
+        Acc = Ac * (1.0 - rho_cc_val)
 
-        # Arah-x
-        sx_prime = sx - db_hoop
-        ke_x = (1.0 - sx_prime / (2.0 * bc)) / (1.0 - rho_cc_val)
+        # Effective confinement (satu nilai ke untuk kedua arah)
+        sum_w2 = sum(w ** 2 for w in w_clear) if w_clear else 0.0
+        Ae_per_Ac = ((1.0 - sum_w2 / (6.0 * bc * hc))
+                     * (1.0 - s_prime / (2.0 * bc))
+                     * (1.0 - s_prime / (2.0 * hc)))
+        ke = Ae_per_Ac / (1.0 - rho_cc_val)
 
-        # Arah-y
-        sy_prime = sy - db_hoop
-        ke_y = (1.0 - sy_prime / (2.0 * hc)) / (1.0 - rho_cc_val)
-
-        flx = ke_x * rho_x * self.fyh
-        fly = ke_y * rho_y * self.fyh
-
-        # Equivalent uniform pressure
+        flx = ke * rho_x * self.fyh
+        fly = ke * rho_y * self.fyh
         fl = math.sqrt(flx * fly) if (flx > 0 and fly > 0) else 0.0
 
-        # Confined strength
         fcc = self._fcc_from_fl(fl)
-
-        # Strains
         epsc0 = self._epsc0(fcc)
 
-        # εcu untuk rectangular (Mander Eq. 33)
-        # εcu = 0.004 + 1.4 * rho_s * fyh * esm / fcc
-        # di sini rho_s = rata-rata volumetrik = 0.5*(rho_x + rho_y)
-        rho_s = 0.5 * (rho_x + rho_y)
+        # Mander Eq. 33: rho_s = rho_x + rho_y
+        rho_s = rho_x + rho_y
         epcu = self._epcu(fcc, rho_s)
 
         return {
@@ -192,7 +235,8 @@ class ManderConfinement:
             'bx': bx, 'hy': hy, 'bc': bc, 'hc': hc,
             'Ac': Ac, 'Acc': Acc,
             'rho_x': rho_x, 'rho_y': rho_y, 'rho_s': rho_s,
-            'ke_x': ke_x, 'ke_y': ke_y,
+            'rho_cc': rho_cc_val,
+            'ke': ke, 'ke_x': ke, 'ke_y': ke,
             'flx': flx, 'fly': fly, 'fl': fl,
             'fcc': fcc, 'epsc0': epsc0, 'epcu': epcu,
             'Ec': self.Ec,
@@ -214,15 +258,11 @@ class ManderConfinement:
                            - 2.0 * fl / self.fpc)
 
     def _epsc0(self, fcc):
-        """
-        Mander Eq. 11: εc0 = 0.002 * [1 + 5*(f'cc/f'c - 1)]
-        """
+        """Mander Eq. 11: epsc0 = 0.002 * [1 + 5*(f'cc/f'c - 1)]"""
         return 0.002 * (1.0 + 5.0 * (fcc / self.fpc - 1.0))
 
     def _epcu(self, fcc, rho_s):
-        """
-        Mander Eq. 33: εcu = 0.004 + 1.4 * rho_s * fyh * esm / f'cc
-        """
+        """Mander Eq. 33: epscu = 0.004 + 1.4 * rho_s * fyh * esm / f'cc"""
         return 0.004 + 1.4 * rho_s * self.fyh * self.esm / fcc
 
     # ==================================================================
@@ -230,15 +270,18 @@ class ManderConfinement:
     # ==================================================================
     def stress(self, eps, fcc, epsc0, Ec=None):
         """
-        Mander Eq. 1 & 4: tegangan beton terkekang pada regangan eps.
+        Mander Eq. 1 & 4: tegangan beton terkekang pada regangan eps
+        (eps dan hasil POSITIF dalam tekan).
 
-        σc = f'cc * x * r / (r - 1 + x^r)
-        x = εc / εc0
-        r = Ec / (Ec - Esec)
-        Esec = f'cc / εc0
+        sigma_c = f'cc * x * r / (r - 1 + x^r)
+        x = eps / epsc0 ; r = Ec / (Ec - Esec) ; Esec = f'cc / epsc0
         """
-        Ec = Ec or self.Ec
+        Ec = self.Ec if Ec is None else Ec
         Esec = fcc / epsc0
+        if Esec >= Ec:
+            raise ValueError(
+                "Esec ({:.3e}) >= Ec ({:.3e}); kurva Mander tidak "
+                "terdefinisi (cek epsc0 / fcc).".format(Esec, Ec))
         r = Ec / (Ec - Esec)
         x = eps / epsc0
         return fcc * x * r / (r - 1.0 + x ** r)
@@ -250,7 +293,7 @@ class ManderConfinement:
         print(f"  f'cc     = {result['fcc']/1000:8.2f} MPa  "
               f"(+{(result['fcc']/result['fpc']-1)*100:.1f}%)")
         print(f"  fl       = {result['fl']/1000:8.2f} MPa")
-        print(f"  ke       = {result.get('ke', result.get('ke_x', 0)):8.3f}")
+        print(f"  ke       = {result.get('ke', 0):8.3f}")
         print(f"  rho_s    = {result['rho_s']:8.4f}")
         print(f"  epsc0    = {result['epsc0']:8.5f}")
         print(f"  epcu     = {result['epcu']:8.5f}")
@@ -265,38 +308,42 @@ class ManderConcrete:
     Wrapper yang menggabungkan cover (Concrete02) dan core (Concrete04)
     berdasarkan parameter Mander.
 
-    Digunakan bersama ManderConfinement untuk langsung menghasilkan
-    uniaxialMaterial OpenSees.
-
     Catatan:
     - Cover  : Concrete02 (model Kent-Scott-Park dimodifikasi)
     - Core   : Concrete04 (Popovics + Mander, siap untuk fiber)
     """
 
     def __init__(self, fpc, epsc0_unconf=-0.002, fpcu_unconf=None,
-                 epsU_unconf=-0.005, ft=None, Ets=None):
+                 epsU_unconf=-0.005, ft=None, Ets=None, rat=0.1):
         """
-        Parameter cover (tak terkekang).
+        Parameter cover (tak terkekang). Tanda input dinormalisasi:
+        tekan -> negatif, tarik -> positif, sesuai konvensi OpenSees.
+
         fpc : kuat tekan (kPa, nilai POSITIF).
+        rat : lambda Concrete02 (rasio kemiringan unload/reload), default 0.1.
         """
         self.fpc = abs(fpc)
-        self.epsc0 = epsc0_unconf
-        self.fpcu = fpcu_unconf if fpcu_unconf else -0.2 * self.fpc
-        self.epsU = epsU_unconf
-        self.ft = ft if ft else 0.1 * self.fpc     # tensile strength
-        self.Ets = Ets if Ets else 0.05 * self._Ec()
+        self.epsc0 = -abs(epsc0_unconf)
+        self.fpcu = (-abs(fpcu_unconf) if fpcu_unconf is not None
+                     else -0.2 * self.fpc)
+        self.epsU = -abs(epsU_unconf)
+        self.ft = abs(ft) if ft is not None else 0.1 * self.fpc
+        self.Ets = abs(Ets) if Ets is not None else 0.05 * self._Ec()
+        self.rat = rat
 
     def _Ec(self):
         return 4700.0 * math.sqrt(self.fpc / 1000.0) * 1000.0  # kPa
 
     def define_cover(self, mat_tag):
         """Definisikan material cover (Concrete02)."""
+        # Urutan OpenSees: fpc epsc0 fpcu epsU lambda ft Ets
         ops.uniaxialMaterial(
             'Concrete02', mat_tag,
-            -self.fpc,        # f'c (negatif untuk tekan)
-            self.epsc0,
-            -self.fpcu,       # fpcu (negatif)
-            self.epsU,
+            -self.fpc,        # f'c (negatif)
+            self.epsc0,       # negatif
+            self.fpcu,        # negatif (sudah dinormalisasi)
+            self.epsU,        # negatif
+            self.rat,         # lambda
             self.ft,
             self.Ets
         )
@@ -319,8 +366,8 @@ class ManderConcrete:
         ops.uniaxialMaterial(
             'Concrete04', mat_tag,
             -fcc,             # f'cc (negatif)
-            -epsc0,           # εc0 (negatif)
-            -epcu,            # εcu (negatif)
+            -epsc0,           # epsc0 (negatif)
+            -epcu,            # epscu (negatif)
             Ec,
             self.ft
         )
