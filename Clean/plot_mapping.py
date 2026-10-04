@@ -6,8 +6,15 @@ Visualisasi mapping penampang sepanjang jembatan Baros.
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib.patches import Rectangle
-from section_mapping import SECTION_MAP
-from support_data import SUPPORTS
+import sys
+import os
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(BASE_DIR)
+import project_data as pdata
+
+SECTION_MAP = pdata.SECTION_MAP
+SUPPORTS = pdata.SUPPORTS
+EXPANSION_JOINTS = pdata.EXPANSION_JOINTS
 
 # Warna per tipe penampang
 COLORS = {
@@ -46,7 +53,7 @@ for name, data in SUPPORTS.items():
 # ============================================================
 # PLOT EXPANSION JOINT
 # ============================================================
-from support_data import EXPANSION_JOINTS
+
 for ej, support in EXPANSION_JOINTS.items():
     x = SUPPORTS[support]["x"]
     ax.axvline(x=x, color="blue", linestyle="-", linewidth=2, alpha=0.5)
