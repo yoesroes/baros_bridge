@@ -370,6 +370,74 @@ def print_max_kombinasi(elemen_data):
     print("-" * 80)
     print()
 
+# ============================================================
+# 7. SIMPAN OUTPUT KE FILE
+# ============================================================
+
+def save_output_ke_file(elemen_data, filename="output/loads_output.txt"):
+    """
+    Simpan output lengkap ke file teks.
+    
+    Parameters
+    ----------
+    elemen_data : list of dict
+        Data beban per elemen
+    filename : str
+        Path file output
+    """
+    import os
+    
+    # Buat folder output kalau belum ada
+    os.makedirs(os.path.dirname(filename), exist_ok=True)
+    
+    with open(filename, "w") as f:
+        # Redirect print ke file
+        import sys
+        original_stdout = sys.stdout
+        sys.stdout = f
+        
+        try:
+            print("=" * 100)
+            print("OUTPUT MODUL BEBAN — JEMBATAN BAROS")
+            print("=" * 100)
+            print()
+            
+            print_parameter()
+            print_ringkasan(elemen_data)
+            print_ringkasan_per_tipe(elemen_data)
+            print_semua_kombinasi(elemen_data)
+            print_max_kombinasi(elemen_data)
+            
+            print("=" * 100)
+            print("SELESAI")
+            print("=" * 100)
+        finally:
+            sys.stdout = original_stdout
+    
+    print("Output disimpan: {}".format(filename))
+
+def save_csv(elemen_data, filename="output/loads_output.csv"):
+    """Simpan beban per elemen ke CSV."""
+    import os
+    import csv
+    
+    os.makedirs(os.path.dirname(filename), exist_ok=True)
+    
+    with open(filename, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            "ele_tag", "x1", "x2", "tipe", "L", "A",
+            "w_box", "w_non_struktur", "w_hidup", "w_total"
+        ])
+        
+        for ele in elemen_data:
+            writer.writerow([
+                ele["ele_tag"], ele["x1"], ele["x2"], ele["tipe"],
+                ele["L"], ele["A"], ele["w_box"],
+                ele["w_non_struktur"], ele["w_hidup"], ele["w_total"]
+            ])
+    
+    print("CSV disimpan: {}".format(filename))
 
 # ============================================================
 # 6. MAIN (TEST)
@@ -389,31 +457,16 @@ if __name__ == "__main__":
     # Print ringkasan
     print_ringkasan(elemen_data)
     print_ringkasan_per_tipe(elemen_data)
+    print_semua_kombinasi(elemen_data)
+    print_max_kombinasi(elemen_data)
     
-    # Print semua kombinasi (ringkas — 5 elemen pertama)
-    print("=" * 120)
-    print("CONTOH SEMUA KOMBINASI (5 ELEMEN PERTAMA)")
-    print("=" * 120)
-    
-    kombinasi_list = list(KOMBINASI.keys())
-    header = "{:>4s} {:>10s}".format("Tag", "Tipe")
-    for k in kombinasi_list:
-        header += " {:>12s}".format(k[:10])
-    print(header)
-    print("-" * 120)
-    
-    for ele in elemen_data[:5]:
-        row = "{:>4d} {:>10s}".format(ele["ele_tag"], ele["tipe"])
-        for k in kombinasi_list:
-            w = hitung_w_kombinasi(
-                ele["w_box"], ele["w_non_struktur"], ele["w_hidup"],
-                kombinasi=k
-            )
-            row += " {:>12.2f}".format(w)
-        print(row)
-    
-    print("-" * 120)
-    print()
+    # Simpan ke file
+    save_output_ke_file(elemen_data, 
+                        "/home/yoesroes/Sipil/baros_bridge/output/loads_output.txt")
+
+    save_csv(elemen_data,
+             "/home/yoesroes/Sipil/baros_bridge/output/loads_output.csv")
+
     
     # Print max kombinasi
     print_max_kombinasi(elemen_data[:10])
