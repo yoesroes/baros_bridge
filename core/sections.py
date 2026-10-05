@@ -5,12 +5,12 @@ Satuan: kN, m, kPa.
 
 Section deck (elastis):
 - A  : luas penampang (m²)
-- Ix : momen inersia terhadap sumbu kuat (m⁴)
-- Iy : momen inersia terhadap sumbu lemah (m⁴)
+- Ix : momen inersia terhadap sumbu horizontal -> lentur VERTIKAL (m⁴)
+- Iy : momen inersia terhadap sumbu vertikal -> lentur LATERAL (m⁴)
 - J  : konstanta torsi (m⁴)
 
 Section diambil dari project_data.BOX_SECTIONS.
-J diestimasi dari A, Ix, Iy (belum dihitung dari DXF).
+J dari analisis penampang (BOX_SECTIONS[tipe]['J']).
 
 Untuk pier, section fiber akan dibuat di modul terpisah (nanti).
 
@@ -30,9 +30,9 @@ import sys
 # tipikal & tumpuan: dari warping analysis DXF
 # hollow: estimasi proporsional (warping segfault)
 J_VALUES = {
-    "solid":   3.8232,    # dari tipikal
-    "hollow":  3.7537,    # dari warping CGS
-    "tumpuan": 3.1660,    # dari tumpuan
+    "solid":   3.8232,    # warping analysis
+    "hollow":  3.7537,    # warping analysis (void drum)
+    "tumpuan": 3.1660,    # warping analysis (cek: lebih kecil dari hollow)
 }
 
 SECTION_TYPES = ["solid", "hollow", "tumpuan"]
@@ -58,13 +58,18 @@ def get_J(tipe, box_sections):
     J : float
         Konstanta torsi (m⁴)
     """
-    # Pakai J yang sudah dihitung
+    # 1) J dari BOX_SECTIONS (sumber utama)
+    sec = box_sections.get(tipe, {})
+    if "J" in sec:
+        return sec["J"]
+
+    # 2) J_VALUES lokal
     if tipe in J_VALUES:
         return J_VALUES[tipe]
-    
-    # Fallback: estimasi
-    sec = box_sections[tipe]
-    return 0.5 * (sec["Ix"] + sec["Iy"])
+
+    # Tanpa estimasi diam-diam: J harus dari analisis penampang
+    raise ValueError("J untuk tipe '{}' belum ada (BOX_SECTIONS/J_VALUES)."
+                     .format(tipe))
 
 
 def get_section(tipe, box_sections):
@@ -160,8 +165,8 @@ def print_section_info(box_sections):
     print("-" * 75)
     print()
     print("Catatan:")
-    print("  - Ix = momen inersia terhadap sumbu kuat (lentur vertikal)")
-    print("  - Iy = momen inersia terhadap sumbu lemah (lentur lateral)")
+    print("  - Ix = inersia sumbu horizontal (lentur vertikal, ~1.45 m4)")
+    print("  - Iy = inersia sumbu vertikal (lentur lateral, ~33 m4)")
     print("  - J  = konstanta torsi (dari warping analysis / estimasi)")
 
     print()

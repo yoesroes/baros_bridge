@@ -245,7 +245,8 @@ def lebar_beban_hidup_per_garis(z_garis=Z_GARIS, B=B_JALAN,
 # ============================================================
 
 def hitung_beban_per_elemen(section_map, box_sections, z_garis=Z_GARIS,
-                            L_beban=None, L_E=None, lane_offset=0.0):
+                            L_beban=None, L_E=None, lane_offset=0.0,
+                            f_berat=None):
     """
     Hitung beban untuk setiap segmen memanjang, total dan per garis.
 
@@ -264,6 +265,11 @@ def hitung_beban_per_elemen(section_map, box_sections, z_garis=Z_GARIS,
         Panjang bentang ekuivalen untuk FBD. None -> FBD = 0.4.
     lane_offset : float
         Pergeseran lajur penuh 5.5 m terhadap sumbu jalan (m).
+    f_berat : list | dict | None
+        Fraksi berat sendiri per garis. list = sama untuk semua tipe;
+        dict {tipe: list} = per tipe. None -> proporsional lebar tributari.
+        Untuk penampang Baros pakai section_strips.fraksi_berat(tipe)
+        (berat sendiri sebanding dengan luas strip, bukan lebar).
 
     Returns
     -------
@@ -271,7 +277,7 @@ def hitung_beban_per_elemen(section_map, box_sections, z_garis=Z_GARIS,
         Satuan beban merata kN/m; P_kel dalam kN.
         Kunci *_garis berisi list sepanjang len(z_garis).
     """
-    f_berat = distribusi_berat_sendiri(z_garis)
+    f_default = distribusi_berat_sendiri(z_garis)
     b_jalan = lebar_jalan_per_garis(z_garis)
     w_barrier_g = distribusi_barrier(z_garis)
     b_hidup = lebar_beban_hidup_per_garis(z_garis, lane_offset=lane_offset)
@@ -293,6 +299,14 @@ def hitung_beban_per_elemen(section_map, box_sections, z_garis=Z_GARIS,
     for i, (x1, x2, tipe) in enumerate(section_map):
         A = box_sections[tipe]["A"]
         w_box = hitung_w_box(A)
+        if f_berat is None:
+            f_i = f_default
+        elif isinstance(f_berat, dict):
+            f_i = f_berat[tipe]
+        else:
+            f_i = f_berat
+        if abs(sum(f_i) - 1.0) > 1e-9:
+            raise ValueError("Jumlah f_berat harus 1 (tipe {}).".format(tipe))
 
         elemen_data.append({
             "seg_id": i + 1,
@@ -307,7 +321,7 @@ def hitung_beban_per_elemen(section_map, box_sections, z_garis=Z_GARIS,
             "w_total": w_box + w_non_struktur + w_hidup,
             "P_kel": P_kel,               # kN (terpusat)
             "z_garis": list(z_garis),
-            "w_box_garis": [w_box * f for f in f_berat],
+            "w_box_garis": [w_box * f for f in f_i],
             "w_non_struktur_garis": w_nonstruk_g,
             "w_hidup_garis": w_hidup_g,
             "P_kel_garis": P_kel_g,
