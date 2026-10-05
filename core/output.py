@@ -1,0 +1,429 @@
+# core/output.py
+"""
+Output analisis deck Jembatan Baros: envelope, kombinasi, tabel, file.
+Satuan: kN, m.
+
+Cara kerja
+----------
+Hasil kasus dasar (analysis.py) dikombinasikan secara linear:
+
+  beban hidup L (envelope, per respon):
+    Lmax = sum_k max(0, BTR_k) + max_k,f KEL_k,f
+    Lmin = sum_k min(0, BTR_k) + min_k,f KEL_k,f
+    dihitung per offset lajur, lalu diambil yang menentukan.
+  kombinasi: V = f_D1*D1 + f_D2*D2 + f_L*L   (faktor dari loads.KOMBINASI)
+
+Keterbatasan: faktor beban mati minimum (pengurangan beban mati) belum
+dipakai; envelope minimum memakai faktor D yang sama dengan maksimum.
+Konvensi gaya ujung elemen (Mz, Vy, T) = gaya OpenSees (eleForce, sumbu
+lokal). Verifikasi tanda dengan balok sederhana sebelum dipakai desain.
+"""
+
+import csv
+import json
+import os
+
+try:
+    from core import loads
+except ImportError:
+    import loads
+
+
+KATEGORI_GAYA = ("Mz_i", "Mz_j", "Vy_i", "Vy_j", "T_i")
+
+
+# ============================================================
+# 1. REAKSI PER SUPPORT
+# ============================================================
+
+def nama_support(bc):
+    """Kunci per garis tumpuan: 'P2[u0]' untuk membedakan sisi EJ."""
+    return "{}[u{}]".format(bc["support"], bc["unit"])
+
+
+def tambah_reaksi_support(hasil, bc_list):
+    """Tambah kategori 'Rsup' = jumlah reaksi semua node satu garis tumpuan."""
+    grup = {}
+    for b in bc_list:
+        grup.setdefault(nama_support(b), []).append(b["node"])
+    for nama, h in hasil.items():
+        h["Rsup"] = {g: sum(h["R"][n] for n in nodes)
+                     for g, nodes in grup.items()}
+    return sorted(grup, key=lambda g: next(
+        b["x"] for b in bc_list if nama_support(b) == g))
+
+
+# ============================================================
+# 2. ENVELOPE DAN KOMBINASI
+# ============================================================
+
+def kelompokkan(kasus):
+    """Kelompokkan nama kasus BTR dan KEL per offset lajur."""
+    btr, kel = {}, {}
+    for nama, k in kasus.items():
+        if k["jenis"] == "BTR":
+            btr.setdefault(k["offset"], []).append(nama)
+        elif k["jenis"] == "KEL":
+            kel.setdefault(k["offset"], []).append(nama)
+    return btr, kel
+
+
+def envelope_hidup(hasil, kasus):
+    """
+    Envelope beban hidup per kategori dan kunci: {cat: {key: (Lmin, Lmax)}}
+    """
+    btr, kel = kelompokkan(kasus)
+    if not btr or not kel:
+        raise ValueError("Kasus BTR/KEL tidak ditemukan.")
+
+    Lenv = {}
+    for cat, isi in hasil["D1"].items():
+        Lenv[cat] = {}
+        for key in isi:
+            lo, hi = float("inf"), float("-inf")
+            for o in btr:
+                b = [hasil[n][cat][key] for n in btr[o]]
+                k = [hasil[n][cat][key] for n in kel[o]]
+                hi = max(hi, sum(max(0.0, v) for v in b) + max(k))
+                lo = min(lo, sum(min(0.0, v) for v in b) + min(k))
+            Lenv[cat][key] = (lo, hi)
+    return Lenv
+
+
+def kombinasi_envelope(hasil, Lenv, kombinasi):
+    """
+    Envelope satu kombinasi: {cat: {key: (vmin, vmax)}}.
+    """
+    if kombinasi not in loads.KOMBINASI:
+        raise ValueError("Kombinasi tidak dikenal: {}".format(kombinasi))
+    f = loads.KOMBINASI[kombinasi]
+    fD1, fD2, fL = f.get("D1", 0.0), f.get("D2", 0.0), f.get("L", 0.0)
+
+    env = {}
+    for cat, isi in hasil["D1"].items():
+        env[cat] = {}
+        for key in isi:
+            base = fD1 * isi[key] + fD2 * hasil["D2"][cat][key]
+            lo, hi = Lenv[cat][key]
+            env[cat][key] = (base + fL * lo, base + fL * hi)
+    return env
+
+
+# ============================================================
+# 3. TABEL
+# ============================================================
+
+def print_reaksi(hasil, Lenv, urutan, kombinasi_list):
+    """Reaksi vertikal per garis tumpuan (jumlah 5 node)."""
+    env = {k: kombinasi_envelope(hasil, Lenv, k)["Rsup"]
+           for k in kombinasi_list}
+
+    print("=" * 110)
+    print("REAKSI VERTIKAL PER GARIS TUMPUAN (kN) - tumpuan kaku di deck")
+    print("=" * 110)
+    kepala = "{:>10s} {:>10s} {:>10s} {:>10s} {:>10s}".format(
+        "Tumpuan", "D1", "D2", "L max", "L min")
+    for k in kombinasi_list:
+        kepala += " {:>10s} {:>10s}".format(k[:8] + " min", k[:8] + " max")
+    print(kepala)
+    print("-" * 110)
+    for g in urutan:
+        baris = "{:>10s} {:>10.1f} {:>10.1f} {:>10.1f} {:>10.1f}".format(
+            g, hasil["D1"]["Rsup"][g], hasil["D2"]["Rsup"][g],
+            Lenv["Rsup"][g][1], Lenv["Rsup"][g][0])
+        for k in kombinasi_list:
+            lo, hi = env[k][g]
+            baris += " {:>10.1f} {:>10.1f}".format(lo, hi)
+        print(baris)
+    tot = sum(hasil["D1"]["Rsup"][g] for g in urutan)
+    print("-" * 110)
+    print("Jumlah reaksi D1 = {:.1f} kN (harus = berat sendiri total)".format(tot))
+    print("Reaksi positif = ke atas (tekan pada tumpuan).")
+    print()
+
+
+def print_gaya_dalam(hasil, Lenv, elemen_result, kombinasi="Kuat I"):
+    """Ekstrem Mz dan Vy per garis memanjang untuk satu kombinasi."""
+    env = kombinasi_envelope(hasil, Lenv, kombinasi)
+    ele = {e["tag"]: e for e in elemen_result["memanjang"]}
+
+    print("=" * 100)
+    print("GAYA DALAM EKSTREM PER GARIS - {}".format(kombinasi))
+    print("=" * 100)
+    print("{:>8s} {:>12s} {:>10s} {:>12s} {:>10s} {:>12s} {:>12s}".format(
+        "z (m)", "Mz min", "x (m)", "Mz max", "x (m)", "|Vy| maks", "|T| maks"))
+    print("-" * 100)
+    for j in sorted({e["garis"] for e in ele.values()}):
+        tags = [t for t, e in ele.items() if e["garis"] == j]
+        mz_min = (float("inf"), None)
+        mz_max = (float("-inf"), None)
+        vmaks = 0.0
+        tmaks = 0.0
+        for t in tags:
+            for cat, sisi in (("Mz_i", "x1"), ("Mz_j", "x2")):
+                lo, hi = env[cat][t]
+                if lo < mz_min[0]:
+                    mz_min = (lo, ele[t][sisi])
+                if hi > mz_max[0]:
+                    mz_max = (hi, ele[t][sisi])
+            for cat in ("Vy_i", "Vy_j"):
+                vmaks = max(vmaks, abs(env[cat][t][0]), abs(env[cat][t][1]))
+            tmaks = max(tmaks, abs(env["T_i"][t][0]), abs(env["T_i"][t][1]))
+        print("{:>8.2f} {:>12.1f} {:>10.2f} {:>12.1f} {:>10.2f} {:>12.1f} "
+              "{:>12.1f}".format(ele[tags[0]]["z"], mz_min[0], mz_min[1],
+                                 mz_max[0], mz_max[1], vmaks, tmaks))
+    print()
+
+def plot_gaya_dalam(hasil, Lenv, elemen_result, out_dir,
+                    kombinasi="Kuat I"):
+    """
+    Plot envelope gaya dalam satu kombinasi untuk 5 garis memanjang.
+
+    Output:
+      - Mz_<kombinasi>.png
+      - Vy_<kombinasi>.png
+      - T_<kombinasi>.png
+
+    Nilai envelope dihitung dengan kombinasi_envelope(), sehingga
+    konsisten dengan tabel print_gaya_dalam().
+    """
+    import os
+    import matplotlib.pyplot as plt
+
+    env = kombinasi_envelope(hasil, Lenv, kombinasi)
+
+    ele = {
+        e["tag"]: e
+        for e in elemen_result["memanjang"]
+    }
+
+    garis = sorted({
+        e["garis"] for e in ele.values()
+    })
+
+    os.makedirs(out_dir, exist_ok=True)
+
+    # --------------------------------------------------------
+    # Helper: susun titik sepanjang satu garis
+    # --------------------------------------------------------
+    def data_garis(j, cat_i, cat_j):
+        data = []
+
+        tags = sorted(
+            [t for t, e in ele.items() if e["garis"] == j],
+            key=lambda t: ele[t]["x1"]
+        )
+
+        for t in tags:
+            e = ele[t]
+
+            data.append(
+                (e["x1"], env[cat_i][t][0], env[cat_i][t][1])
+            )
+
+            data.append(
+                (e["x2"], env[cat_j][t][0], env[cat_j][t][1])
+            )
+
+        # Gabungkan titik dengan x sama
+        data.sort(key=lambda p: p[0])
+
+        return data
+
+    # --------------------------------------------------------
+    # Plot satu besaran
+    # --------------------------------------------------------
+    def plot_env(cat_i, cat_j, ylabel, filename, mode="signed"):
+        fig, ax = plt.subplots(figsize=(14, 6))
+
+        for j in garis:
+            data = data_garis(j, cat_i, cat_j)
+
+            xs = [p[0] for p in data]
+
+            if mode == "signed":
+                ymin = [p[1] for p in data]
+                ymax = [p[2] for p in data]
+
+                ax.plot(
+                    xs, ymin,
+                    marker="o",
+                    markersize=2,
+                    label="z = {:.2f} m — min".format(
+                        ele[next(
+                            t for t in ele
+                            if ele[t]["garis"] == j
+                        )]["z"]
+                    )
+                )
+
+                ax.plot(
+                    xs, ymax,
+                    linestyle="--",
+                    linewidth=1.0
+                )
+
+            elif mode == "abs":
+                # Envelope absolut:
+                # max(|min|, |max|)
+                vals = [
+                    max(abs(p[1]), abs(p[2]))
+                    for p in data
+                ]
+
+                ax.plot(
+                    xs, vals,
+                    marker="o",
+                    markersize=2,
+                    label="z = {:.2f} m".format(
+                        ele[next(
+                            t for t in ele
+                            if ele[t]["garis"] == j
+                        )]["z"]
+                    )
+                )
+
+        ax.axhline(0.0, linewidth=0.8)
+
+        ax.set_xlabel("x (m)")
+        ax.set_ylabel(ylabel)
+        ax.set_title(
+            "{} — {}".format(kombinasi, ylabel)
+        )
+
+        ax.grid(True, alpha=0.3)
+        ax.legend()
+        fig.tight_layout()
+
+        path = os.path.join(out_dir, filename)
+        fig.savefig(path, dpi=150)
+        plt.close(fig)
+
+        print("Diagram disimpan:", path)
+
+    # --------------------------------------------------------
+    # Mz : tampilkan envelope min dan max
+    # --------------------------------------------------------
+    plot_env(
+        "Mz_i",
+        "Mz_j",
+        "Mz (kNm)",
+        "Mz_{}.png".format(kombinasi.replace(" ", "_")),
+        mode="signed"
+    )
+
+    # --------------------------------------------------------
+    # Vy : maksimum absolut
+    # --------------------------------------------------------
+    plot_env(
+        "Vy_i",
+        "Vy_j",
+        "|Vy| (kN)",
+        "Vy_{}.png".format(kombinasi.replace(" ", "_")),
+        mode="abs"
+    )
+
+    # --------------------------------------------------------
+    # T : maksimum absolut
+    # --------------------------------------------------------
+    plot_env(
+        "T_i",
+        "T_j",
+        "|T| (kNm)",
+        "T_{}.png".format(kombinasi.replace(" ", "_")),
+        mode="abs"
+    )
+
+def print_lendutan(hasil, Lenv, node_result, kombinasi="Daya Layan I"):
+    """Lendutan vertikal terbesar ke bawah dan ke atas."""
+    env = kombinasi_envelope(hasil, Lenv, kombinasi)["Uy"]
+    pos = {}
+    for (i, j), tag in node_result["node_map"].items():
+        pos[tag] = (node_result["stasiun"][i]["x"],
+                    node_result["z_garis"][j])
+
+    bawah = min(env.items(), key=lambda kv: kv[1][0])
+    atas = max(env.items(), key=lambda kv: kv[1][1])
+    print("=" * 75)
+    print("LENDUTAN VERTIKAL - {}".format(kombinasi))
+    print("=" * 75)
+    print("  Ke bawah maks : {:>9.2f} mm  di node {} (x = {:.2f} m, z = {:.2f} m)"
+          .format(bawah[1][0] * 1000, bawah[0], *pos[bawah[0]]))
+    print("  Ke atas maks  : {:>9.2f} mm  di node {} (x = {:.2f} m, z = {:.2f} m)"
+          .format(atas[1][1] * 1000, atas[0], *pos[atas[0]]))
+    print()
+
+
+# ============================================================
+# 4. SIMPAN FILE
+# ============================================================
+
+def simpan_reaksi(path_json, path_csv, hasil, Lenv, urutan, bentang,
+                  kombinasi_semua):
+    """Simpan reaksi per garis tumpuan ke JSON dan CSV."""
+    folder = os.path.dirname(path_json)
+    if folder:
+        os.makedirs(folder, exist_ok=True)
+
+    env = {k: kombinasi_envelope(hasil, Lenv, k)["Rsup"]
+           for k in kombinasi_semua}
+
+    data = {
+        "satuan": "kN (positif = ke atas)",
+        "catatan": "tumpuan kaku di deck; belum ada pier",
+        "bentang": [{"k": b["k"], "nama": b["nama"], "L": b["L"]}
+                    for b in bentang],
+        "tumpuan": {},
+    }
+    for g in urutan:
+        data["tumpuan"][g] = {
+            "D1": hasil["D1"]["Rsup"][g],
+            "D2": hasil["D2"]["Rsup"][g],
+            "L_min": Lenv["Rsup"][g][0],
+            "L_max": Lenv["Rsup"][g][1],
+            "kombinasi": {k: {"min": env[k][g][0], "max": env[k][g][1]}
+                          for k in kombinasi_semua},
+        }
+
+    with open(path_json, "w") as f:
+        json.dump(data, f, indent=2)
+    print("JSON disimpan: {}".format(path_json))
+
+    with open(path_csv, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["tumpuan", "kombinasi", "R_min", "R_max"])
+        for g in urutan:
+            for k in kombinasi_semua:
+                w.writerow([g, k, env[k][g][0], env[k][g][1]])
+    print("CSV disimpan: {}".format(path_csv))
+
+
+# ============================================================
+# 5. LAPORAN LENGKAP
+# ============================================================
+
+def laporan(hasil, kasus, node_result, bc_list, bentang, out_dir,
+            elemen_result=None):
+    """Cetak ringkasan dan simpan reaksi.json / reaksi.csv."""
+    urutan = tambah_reaksi_support(hasil, bc_list)
+    Lenv = envelope_hidup(hasil, kasus)
+
+    print_reaksi(hasil, Lenv, urutan, ["Daya Layan I", "Kuat I"])
+    print_lendutan(hasil, Lenv, node_result, "Daya Layan I")
+
+    if elemen_result is not None:
+        print_gaya_dalam(hasil, Lenv, elemen_result, "Kuat I")
+
+        plot_gaya_dalam(
+            hasil,
+            Lenv,
+            elemen_result,
+            out_dir,
+            kombinasi="Kuat I"
+        )
+
+    simpan_reaksi(os.path.join(out_dir, "reaksi.json"),
+                  os.path.join(out_dir, "reaksi.csv"),
+                  hasil, Lenv, urutan, bentang,
+                  [k for k in loads.KOMBINASI if "Ekstrem" not in k])
+    return Lenv, urutan

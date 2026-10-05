@@ -52,7 +52,7 @@ N_SISI = 2              # jumlah sisi barrier
 
 # Beban hidup (SNI 1725:2016 Pasal 8.3)
 Q_BTR = 9.0             # kPa, BTR untuk L <= 30 m
-P_KEL = 49.0            # kN/m (per meter lebar lintang)
+P_KEL = 49.0            # kN/m per meter lebar transversal
 FBD = 0.4               # default FBD untuk L_E <= 50 m
 LEBAR_LAJUR_PENUH = 5.5 # m, lebar yang dibebani 100%
 L_BTR_BATAS = 30.0      # m, batas reduksi BTR
@@ -150,6 +150,15 @@ def hitung_P_kel(L_E=None, B=B_JALAN):
     """
     return P_KEL * lebar_ekuivalen(B) * (1.0 + hitung_fbd(L_E))
 
+
+def hitung_P_kel_per_lebar(L_E=None):
+    """
+    Intensitas KEL terhadap lebar transversal.
+
+    Satuan:
+        kN/m lebar transversal
+    """
+    return P_KEL * (1.0 + hitung_fbd(L_E))
 
 def hitung_w_hidup(L=None):
     """
@@ -283,7 +292,7 @@ def hitung_beban_per_elemen(section_map, box_sections, z_garis=Z_GARIS,
     b_hidup = lebar_beban_hidup_per_garis(z_garis, lane_offset=lane_offset)
 
     q = hitung_q_btr(L_beban)
-    fbd = hitung_fbd(L_E)
+    P_kel_per_lebar = hitung_P_kel_per_lebar(L_E)
     w_nonstruk_m2 = GAMMA_ASPAL * T_ASPAL + GAMMA_AIR * T_AIR  # kPa
 
     w_non_struktur = hitung_w_non_struktur()
@@ -293,7 +302,7 @@ def hitung_beban_per_elemen(section_map, box_sections, z_garis=Z_GARIS,
     w_nonstruk_g = [w_nonstruk_m2 * b + wb
                     for b, wb in zip(b_jalan, w_barrier_g)]
     w_hidup_g = [q * b for b in b_hidup]
-    P_kel_g = [P_KEL * (1.0 + fbd) * b for b in b_hidup]
+    P_kel_g = [P_kel_per_lebar * b for b in b_hidup]
 
     elemen_data = []
     for i, (x1, x2, tipe) in enumerate(section_map):

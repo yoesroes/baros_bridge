@@ -27,12 +27,30 @@ import os
 import sys
 import openseespy.opensees as ops
 
+try:
+    from core.section_strips import (
+        Z_GARIS_DEFAULT,
+        z_garis_centroid,
+    )
+except ImportError:
+    from section_strips import (
+        Z_GARIS_DEFAULT,
+        z_garis_centroid,
+    )
+
 
 # ============================================================
 # 1. KONSTANTA
 # ============================================================
 
-Z_GARIS = (-5.0, -3.5, 0.0, 3.5, 5.0)
+Z_GARIS_REF = Z_GARIS_DEFAULT
+
+# Posisi aktual garis grillage = centroid tributary strip.
+# Boundary tetap berasal dari Z_GARIS_REF.
+Z_GARIS = z_garis_centroid(
+    tipe="hollow",
+    z_garis_ref=Z_GARIS_REF,)
+
 N_Z = len(Z_GARIS)
 Y_BIDANG = 0.0   # bidang netral
 
