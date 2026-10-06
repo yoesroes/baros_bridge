@@ -83,28 +83,34 @@ def bangun_kasus(node_result, elemen_result, box_sections, supports,
                            "total": beban vertikal total (kN, negatif ke bawah)}
     bentang : list dari daftar_bentang()
     """
-    z_garis = node_result["z_garis"]
+    z_garis = node_result["z_garis"]   # posisi fisik node
+    z_ref = node_result["z_ref"]       # referensi tributary strip
     stasiun = node_result["stasiun"]
     node_map = node_result["node_map"]
     memanjang = elemen_result["memanjang"]
     bentang = daftar_bentang(supports)
 
+    kasus = {}
     f_berat = {}
 
     def fraksi(tipe):
         if tipe not in f_berat:
-            f_berat[tipe] = strips.fraksi_berat(tipe, z_garis)
+            f_berat[tipe] = strips.fraksi_berat(
+                tipe,
+                z_ref,
+            )
         return f_berat[tipe]
-
-    b_jalan = loads.lebar_jalan_per_garis(z_garis)
-    w_bar = loads.distribusi_barrier(z_garis)
-    w_ns_m2 = loads.GAMMA_ASPAL * loads.T_ASPAL + loads.GAMMA_AIR * loads.T_AIR
-
-    kasus = {}
 
     def total_ele(wy):
         panjang = {e["tag"]: e["x2"] - e["x1"] for e in memanjang}
         return sum(w * panjang[t] for t, w in wy.items())
+    
+    b_jalan = loads.lebar_jalan_per_garis(z_garis)
+    w_barrier_g = loads.distribusi_barrier(z_garis)
+    w_nonstruk_m2 = (
+        loads.GAMMA_ASPAL * loads.T_ASPAL
+        + loads.GAMMA_AIR * loads.T_AIR
+    )
 
     # ---- D1, D2 ----
     d1 = {}
@@ -113,7 +119,7 @@ def bangun_kasus(node_result, elemen_result, box_sections, supports,
         j, tipe = e["garis"], e["tipe_section"]
         A = box_sections[tipe]["A"]
         d1[e["tag"]] = -loads.hitung_w_box(A) * fraksi(tipe)[j]
-        d2[e["tag"]] = -(w_ns_m2 * b_jalan[j] + w_bar[j])
+        d2[e["tag"]] = -(w_nonstruk_m2 * b_jalan[j] + w_barrier_g[j])
     kasus["D1"] = {"jenis": "D1", "bentang": None, "offset": None, "f": None,
                    "ele": d1, "node": {}, "total": total_ele(d1)}
     kasus["D2"] = {"jenis": "D2", "bentang": None, "offset": None, "f": None,

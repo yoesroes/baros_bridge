@@ -45,8 +45,10 @@ except ImportError:
 
 Z_GARIS_REF = Z_GARIS_DEFAULT
 
-# Posisi aktual garis grillage = centroid tributary strip.
-# Boundary tetap berasal dari Z_GARIS_REF.
+# Posisi FISIK node grillage = centroid tributary strip (tipe hollow).
+# Z_GARIS_REF hanya referensi PEMBATAS tributary untuk section_strips;
+# keduanya dibawa terpisah (z_ref vs z_garis) ke elements.py.
+# JANGAN pakai Z_GARIS sebagai z_ref (menggeser batas strip).
 Z_GARIS = z_garis_centroid(
     tipe="hollow",
     z_garis_ref=Z_GARIS_REF,)
@@ -136,7 +138,7 @@ def buat_node(stasiun, z_garis=Z_GARIS):
 
 
 def buat_semua_node(section_map, supports=None, z_garis=Z_GARIS,
-                    ej_supports=EJ_SUPPORTS):
+                    ej_supports=EJ_SUPPORTS, z_ref=Z_GARIS_REF):
     """
     Buat semua node grillage.
 
@@ -147,7 +149,8 @@ def buat_semua_node(section_map, supports=None, z_garis=Z_GARIS,
         "x_index": {x: [i, ...]},
         "x_sorted": list x per stasiun (EJ muncul dua kali),
         "stasiun": list of dict,
-        "z_garis": tuple,
+        "z_garis": tuple (posisi fisik node),
+        "z_ref": tuple (referensi pembatas tributary strip),
         "n_node": int,
         "n_unit": int,
     }
@@ -162,6 +165,7 @@ def buat_semua_node(section_map, supports=None, z_garis=Z_GARIS,
         "x_sorted": [s["x"] for s in stasiun],
         "stasiun": stasiun,
         "z_garis": z_garis,
+        "z_ref": tuple(z_ref),
         "n_node": len(stasiun) * len(z_garis),
         "n_unit": stasiun[-1]["unit"] + 1,
     }
@@ -188,7 +192,8 @@ def print_node_info(result):
     print()
     print("  x range          : {:.4f} -> {:.4f} m".format(
         stasiun[0]["x"], stasiun[-1]["x"]))
-    print("  z garis          : {}".format(z_garis))
+    print("  z garis (node)   : {}".format(z_garis))
+    print("  z_ref (tributary): {}".format(result["z_ref"]))
     print("  y (bidang)       : {:.2f} m".format(Y_BIDANG))
     ej = [(s["x"], s["unit"]) for s in stasiun if s["sisi"]]
     print("  Stasiun EJ (x, unit): {}".format(ej))

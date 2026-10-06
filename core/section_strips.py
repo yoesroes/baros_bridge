@@ -6,28 +6,32 @@ Satuan: m. Sumbu: z = melintang jembatan, y = vertikal (ke atas).
 Mengapa modul ini ada
 ---------------------
 Penampang Baros hampir solid: badan tengah setebal ~1.5 m dengan sayap
-tipis (0.22 - 0.45 m). Total A, Ix, J untuk SELURUH lebar tidak boleh
-dipasang pada tiap garis memanjang grillage (hasilnya 5x terlalu kaku).
-Modul ini memotong penampang menjadi strip, satu strip per garis
-memanjang, lalu:
-- A_i, Ix_i (lentur vertikal) : integral langsung strip (jumlah = total),
-- Iy_i (lentur lateral)       : integral lokal terhadap garis, tidak negatif,
-- J_i                         : proporsional d^3 (strip tebal lebih kaku),
+tipis. Total A, Ix, J untuk SELURUH lebar tidak boleh dipasang pada tiap
+garis memanjang grillage (hasilnya ~5x terlalu kaku). Modul ini memotong
+penampang menjadi strip tributary, satu strip per garis memanjang:
+- posisi garis aktual = centroid z strip (zbar),
+- A_i                         : integral strip (jumlah = total),
+- Ix_i (lentur vertikal)      : Ix strip terhadap centroid VERTIKAL PENAMPANG
+                                PENUH (yc), yaitu I_lokal + A_i*(ybar_i-yc)^2.
+                                Grillage planar menaruh semua garis pada satu
+                                elevasi, jadi suku Steiner vertikal harus
+                                dibawa Ix_i agar jumlah Ix_i = Ix total,
+- Iy_i (lentur lateral)       : Ix lokal terhadap zbar_i. Suku A_i*zbar_i^2
+                                sudah terbawa oleh posisi node, sehingga
+                                sum(Iy_i + A_i*zbar_i^2) = Iy total,
+- J_i                         : proporsional integral d^3,
 - fraksi berat sendiri        : sama dengan fraksi A_i,
 - elemen melintang            : properti jalur selebar dx dari profil d(z).
 
 Fraksi dihitung dari geometri lalu DISKALA ke total per tipe di
-project_data.BOX_SECTIONS (A, Ix, Iy, J) sehingga total tetap sama dengan
-hasil perhitungan penampangmu.
+project_data.BOX_SECTIONS (A, Ix, Iy, J). ringkasan() mengaudit properti
+FINAL (keluaran properti_garis), bukan besaran geometri mentah.
 
-Geometri (dari DXF, diukur ~ +/-0.02 m):
-- lebar 10.0 m, tinggi di CL 1.525 m, kemiringan permukaan 2%
-- tebal ujung sayap 0.22 m, tebal pangkal sayap 0.454 m (z = 2.5665 m)
-- lebar dasar badan 3.3846 m (z = +/-1.6923 m)
-- void tipe hollow: 2 drum bekas D 0.572 m di z = +/-0.625 m, pusat 0.725 m
-  di atas dasar. Dua lingkaran D 0.280 (z = +/-1.765 m) TIDAK dihitung
-  sebagai void (luas void README hollow = 2 drum besar); aktifkan dengan
-  DRUM_KECIL_AKTIF = True jika ternyata void.
+Geometri (dari DXF) - lihat konstanta di bagian 1; nilai di sana yang berlaku:
+- lebar 10.0 m, tinggi di CL 1.50 m, kemiringan permukaan 2%
+- void tipe hollow: 2 drum D 0.500 di z = +/-0.625 m (pusat 0.725 m di atas
+  dasar) + 2 drum kecil D 0.280 di z = +/-1.765 m (DRUM_KECIL_AKTIF = True).
+  Luas void total 0.516 m2 = selisih A solid - A hollow.
 """
 
 import math
@@ -292,129 +296,162 @@ def _geom(tipe, z_garis):
 # 3. PROPERTI PER GARIS MEMANJANG
 # ============================================================
 
-def properti_garis(tipe, total, z_garis=Z_GARIS_DEFAULT):
+def _cek_z_ref(z_ref):
     """
-    Properti tiap garis memanjang berdasarkan tributary strip aktual.
+    z_ref = titik referensi PEMBATAS tributary (default Z_GARIS_DEFAULT,
+    garis terluar tepat di tepi deck +/-B_DECK/2). Koordinat node fisik
+    (centroid strip) BUKAN z_ref; menukar keduanya menggeser batas strip.
+    """
+    z = list(z_ref)
+    if any(z[i + 1] <= z[i] for i in range(len(z) - 1)):
+        raise ValueError("z_ref harus naik monoton: {}".format(z))
+    tol = 1e-6
+    if abs(z[0] + B_DECK / 2.0) > tol or abs(z[-1] - B_DECK / 2.0) > tol:
+        raise ValueError(
+            "z_ref harus berujung di tepi deck (+/-{:.3f}), bukan koordinat "
+            "node. Dapat: {}. Gunakan z_node= untuk posisi node fisik."
+            .format(B_DECK / 2.0, z))
 
-    z_garis lama hanya digunakan untuk menentukan batas tributary.
-    Posisi garis hasil akhir = centroid zbar tiap strip.
+
+def properti_garis(tipe, total, z_ref=Z_GARIS_DEFAULT, z_node=None):
     """
-    g = _geom(tipe, tuple(z_garis))
+    Properti tiap garis memanjang.
+
+    Parameters
+    ----------
+    z_ref : referensi pembatas tributary (default Z_GARIS_DEFAULT).
+    z_node : posisi z FISIK node/beam grillage. Default = centroid strip
+        (zbar) tipe ini. Di model: nodes.Z_GARIS (centroid strip hollow),
+        yang dipakai bersama oleh semua tipe section.
+
+    Pembagian kekakuan:
+        A_i  : integral strip, diskala (jumlah = total A)
+        Ix_i : Ix_global strip (terhadap yc penampang penuh); node coplanar,
+               jadi suku Steiner vertikal harus dibawa beam
+        Iy_i : suku A_i*z_node_i^2 sudah disediakan kinematika (jarak node
+               ke sumbu jembatan). Sisanya, B = Iy_total - sum(A_i*z_node^2),
+               dibagi ke strip sebanding dengan bobot geometri
+               w_i = Iy_lokal_i + A_geom_i*(zbar_i^2 - z_node_i^2).
+               Total Iy tetap terpenuhi walau total BOX_SECTIONS sedikit
+               berbeda dari geometri DXF (selisih diserap bagian lokal).
+        J_i  : proporsional integral d^3
+
+    Konservasi (properti final):
+        sum(A_i) = A, sum(Ix_i) = Ix, sum(Iy_i + A_i*z_node_i^2) = Iy,
+        sum(J_i) = J.
+    """
+    _cek_z_ref(z_ref)
+    g = _geom(tipe, tuple(z_ref))
     st = g["strips"]
 
-    # --------------------------------------------------------
-    # NORMALISASI terhadap BOX_SECTIONS
-    # --------------------------------------------------------
-    kA = total["A"] / g["A"]
-    kI = total["Ix"] / g["Ix"]
-    kL = total["Iy"] / g["Iy"]
+    if z_node is None:
+        z_node = [s["zbar"] for s in st]
+    z_node = [float(z) for z in z_node]
+    if len(z_node) != len(st):
+        raise ValueError("z_node ({}) != jumlah strip ({})".format(
+            len(z_node), len(st)))
 
+    sA = sum(s["A"] for s in st)
+    sIx = sum(s["Ix_global"] for s in st)
     sD = sum(s["d3"] for s in st)
 
-    if sD <= 0.0:
+    if min(sA, sIx, sD) <= 0.0:
         raise ValueError(
-            "Jumlah d3 <= 0 untuk tipe {!r}".format(tipe)
-        )
+            "Jumlah A/Ix/Iy/d3 <= 0 untuk tipe {!r}".format(tipe))
+
+    kA = total["A"] / sA
+    kI = total["Ix"] / sIx
+
+    # Iy: kurangi bagian kinematik, bagi sisanya menurut bobot geometri
+    K = sum(s["A"] * kA * zn ** 2 for s, zn in zip(st, z_node))
+    B = total["Iy"] - K
+    w = [s["Iy"] + s["A"] * (s["zbar"] ** 2 - zn ** 2)
+         for s, zn in zip(st, z_node)]
+    if B <= 0.0 or min(w) <= 0.0:
+        raise ValueError(
+            "Distribusi Iy gagal (tipe {!r}): Iy_total - sum(A_i*z_node^2) = "
+            "{:.4f}, bobot min = {:.4g}. Cek total BOX_SECTIONS vs geometri "
+            "dan z_node.".format(tipe, B, min(w)))
+    sw = sum(w)
 
     hasil = []
-
-    for s in st:
+    for s, zn, w_i in zip(st, z_node, w):
         A_i = s["A"] * kA
-        Ix_i = s["Ix"] * kI
-        Iy_i = s["Iy"] * kL
+        Ix_i = s["Ix_global"] * kI
+        Iy_i = B * w_i / sw
         J_i = total["J"] * s["d3"] / sD
 
         hasil.append({
-            # posisi aktual grillage
-            "z": s["z"],
-            "zbar": s["zbar"],
-
-            # referensi lama
+            # posisi
+            "z": zn,                    # posisi node fisik (dipakai beam)
+            "zbar": s["zbar"],          # centroid strip hasil partisi z_ref
             "z_ref": s["z_ref"],
-
-            # tributary boundary
-            "z1": s["z1"],
-            "z2": s["z2"],
-
-            # centroid vertikal strip
+            "dz_node": zn - s["zbar"],
+            "z1": s["z1"], "z2": s["z2"],
             "ybar": s["ybar"],
 
-            # properti final
-            "A": A_i,
-            "Ix": Ix_i,
-            "Iy": Iy_i,
-            "J": J_i,
+            # properti final (masuk ke OpenSees)
+            "A": A_i, "Ix": Ix_i, "Iy": Iy_i, "J": J_i,
 
-            # audit
+            # audit / informasi
             "A_geom": s["A"],
-            "Ix_geom": s["Ix"],
-            "Iy_geom": s["Iy"],
-            "Iy_global": s["Iy_global"],
+            "Ix_geom": s["Ix_global"],
+            "Ix_lokal": s["Ix"] * kI,
+            "Iy_lokal": s["Iy"],
+            "Iy_total_node": Iy_i + A_i * zn ** 2,
 
-            "f_A": s["A"] / g["A"],
-            "f_Ix": s["Ix"] / g["Ix"],
+            "f_A": s["A"] / sA,
+            "f_Ix": s["Ix_global"] / sIx,
+            "f_Iy": (Iy_i + A_i * zn ** 2) / total["Iy"],
             "f_J": s["d3"] / sD,
         })
 
     return hasil
 
 
-def fraksi_berat(tipe, z_garis=Z_GARIS_DEFAULT):
+def fraksi_berat(tipe, z_ref=Z_GARIS_DEFAULT):
     """Fraksi berat sendiri per garis (= fraksi luas strip)."""
-    st = _geom(tipe, tuple(z_garis))["strips"]
+    _cek_z_ref(z_ref)
+    st = _geom(tipe, tuple(z_ref))["strips"]
     tot = sum(s["A"] for s in st)
     return [s["A"] / tot for s in st]
 
 
-def ringkasan(tipe, total, z_garis=Z_GARIS_DEFAULT):
-    """Audit konservasi properti geometrik tributary strips."""
+def ringkasan(tipe, total, z_ref=Z_GARIS_DEFAULT, z_node=None):
+    """
+    Audit konservasi pada properti FINAL, memakai z_node yang sama dengan
+    posisi beam di model (p["z"]).
+    """
+    props = properti_garis(tipe, total, z_ref, z_node)
+    g = _geom(tipe, tuple(z_ref))
 
-    g = _geom(tipe, tuple(z_garis))
-    st = g["strips"]
-
-    sumA = sum(s["A"] for s in st)
-
-    sumIx_global = sum(
-        s["Ix_global"]
-        for s in st
-    )
-
-    sumIy_global = sum(
-        s["Iy_global"]
-        for s in st
-    )
-
-    # Rekonstruksi dengan parallel-axis theorem
-    sumIx_reconstructed = sum(
-        s["Ix"]
-        + s["A"] * (s["ybar"] - g["yc"]) ** 2
-        for s in st
-    )
-
-    sumIy_reconstructed = sum(
-        s["Iy"]
-        + s["A"] * s["zbar"] ** 2
-        for s in st
-    )
+    sum_A = sum(p["A"] for p in props)
+    sum_Ix = sum(p["Ix"] for p in props)
+    sum_Ix_lokal = sum(p["Ix_lokal"] for p in props)
+    sum_Iy_beam = sum(p["Iy"] for p in props)
+    sum_Iy = sum(p["Iy"] + p["A"] * p["z"] ** 2 for p in props)
+    sum_J = sum(p["J"] for p in props)
 
     return {
-        "sum_A": sumA,
+        "sum_A": sum_A, "sum_Ix": sum_Ix, "sum_Iy": sum_Iy, "sum_J": sum_J,
+        "sum_Iy_beam": sum_Iy_beam, "sum_Ix_lokal": sum_Ix_lokal,
 
-        "sum_Ix": sumIx_global,
-        "sum_Ix_reconstructed": sumIx_reconstructed,
+        "target_A": total["A"], "target_Ix": total["Ix"],
+        "target_Iy": total["Iy"], "target_J": total["J"],
 
-        "sum_Iy": sumIy_global,
-        "sum_Iy_reconstructed": sumIy_reconstructed,
+        "ratio_A": sum_A / total["A"],
+        "ratio_Ix": sum_Ix / total["Ix"],
+        "ratio_Iy": sum_Iy / total["Iy"],
+        "ratio_J": sum_J / total["J"],
 
-        "target_A": total["A"],
-        "target_Ix": total["Ix"],
-        "target_Iy": total["Iy"],
-        "target_J": total["J"],
+        "max_offset_node": max(abs(p["dz_node"]) for p in props),
 
-        "ratio_A": sumA / total["A"],
-        "ratio_Ix": sumIx_global / total["Ix"],
-        "ratio_Iy": sumIy_global / total["Iy"],
+        # geometri DXF vs total BOX_SECTIONS
+        "geom_ratio_A": g["A"] / total["A"],
+        "geom_ratio_Ix": g["Ix"] / total["Ix"],
+        "geom_ratio_Iy": g["Iy"] / total["Iy"],
     }
+
 
 def z_garis_centroid(
     tipe="hollow",
@@ -426,6 +463,7 @@ def z_garis_centroid(
     z_garis_ref hanya digunakan untuk membentuk tributary
     boundary awal. Boundary TIDAK diiterasikan kembali.
     """
+    _cek_z_ref(z_garis_ref)
     g = _geom(tipe, tuple(z_garis_ref))
 
     return tuple(
@@ -438,7 +476,8 @@ def z_garis_centroid(
 # 4. PROPERTI ELEMEN MELINTANG (JALUR SELEBAR dx)
 # ============================================================
 
-def properti_melintang(dx, tipe="solid", z_garis=None):
+def properti_melintang(dx, tipe="solid", z_garis=None,
+                       verbose=False):
     if z_garis is None:
         z_garis = tuple(
             s["z"] for s in _geom(
@@ -481,35 +520,36 @@ def properti_melintang(dx, tipe="solid", z_garis=None):
             a, b
         )
 
-        J_a = J_t_rect(a)
-        J_b = J_t_rect(b)
-        J_mid = J_t_rect((a + b) / 2.0)
+        if verbose:
+            J_a = J_t_rect(a)
+            J_b = J_t_rect(b)
+            J_mid = J_t_rect((a + b) / 2.0)
 
-        print(
-            f"    J_local: "
-            f"a={J_a:.6f} "
-            f"mid={J_mid:.6f} "
-            f"b={J_b:.6f} "
-            f"J_eq={J_eq:.6f}"
-        )
-
-        print(
-            f"  torsion [{a:5.1f},{b:5.1f}] "
-            f"dx={dx:.4f} "
-            f"d(a)={kedalaman(a):.4f} "
-            f"d(b)={kedalaman(b):.4f} "
-            f"J_eq={J_eq:.6f}"
-        )
-
-        if a < 0.0 < b:
-            s_mid = (a + b) / 2.0
             print(
-                f"    CHECK dx-cross: "
-                f"d(a)={kedalaman(a):.6f} "
-                f"d(mid)={kedalaman(s_mid):.6f} "
-                f"d(b)={kedalaman(b):.6f} "
+                f"    J_local: "
+                f"a={J_a:.6f} "
+                f"mid={J_mid:.6f} "
+                f"b={J_b:.6f} "
                 f"J_eq={J_eq:.6f}"
             )
+
+            print(
+                f"  torsion [{a:5.1f},{b:5.1f}] "
+                f"dx={dx:.4f} "
+                f"d(a)={kedalaman(a):.4f} "
+                f"d(b)={kedalaman(b):.4f} "
+                f"J_eq={J_eq:.6f}"
+            )
+
+            if a < 0.0 < b:
+                s_mid = (a + b) / 2.0
+                print(
+                    f"    CHECK dx-cross: "
+                    f"d(a)={kedalaman(a):.6f} "
+                    f"d(mid)={kedalaman(s_mid):.6f} "
+                    f"d(b)={kedalaman(b):.6f} "
+                    f"J_eq={J_eq:.6f}"
+                )
 
         hasil.append({
             "z1": a,
@@ -532,99 +572,41 @@ def properti_melintang(dx, tipe="solid", z_garis=None):
 
 if __name__ == "__main__":
     contoh = {
-    "solid":   {"A": 8.566952, "Ix": 1.481379, "Iy": 35.853120, "J": 3.8232},
-    "hollow":  {"A": 8.051160, "Ix": 1.465182, "Iy": 35.309473, "J": 3.7537},
-}
+        "solid":  {"A": 8.566952, "Ix": 1.481379, "Iy": 35.853120, "J": 3.8232},
+        "hollow": {"A": 8.051160, "Ix": 1.465182, "Iy": 35.309473, "J": 3.7537},
+    }
+    # posisi node fisik di model = centroid strip hollow
+    Z_NODE = z_garis_centroid("hollow", Z_GARIS_DEFAULT)
+    print("z_ref  :", Z_GARIS_DEFAULT)
+    print("z_node :", [round(z, 4) for z in Z_NODE])
 
     for tipe, tot in contoh.items():
-
         print("=" * 70)
         print("TIPE", tipe)
+        props = properti_garis(tipe, tot, Z_GARIS_DEFAULT, Z_NODE)
+        r = ringkasan(tipe, tot, Z_GARIS_DEFAULT, Z_NODE)
 
-        props = properti_garis(tipe, tot)
-        r = ringkasan(tipe, tot)
-
-        # --------------------------------------------------
-        # PROPERTI TIAP GARIS MEMANJANG
-        # --------------------------------------------------
         for p in props:
             print(
-                "  ref={:6.3f} -> z={:7.4f}  "
-                "ybar={:7.4f}  "
-                "A={:7.4f} ({:5.1f}%)  "
-                "Ix={:8.5f} ({:5.1f}%)  "
-                "Iy_local={:9.5f}  "
-                "J={:7.4f}".format(
-                    p["z_ref"],
-                    p["z"],
-                    p["ybar"],
-                    p["A"],
-                    100.0 * p["f_A"],
-                    p["Ix"],
-                    100.0 * p["f_Ix"],
-                    p["Iy"],
-                    p["J"],
-                )
-            )
+                "  z_node={:7.4f} (zbar={:7.4f})  A={:7.4f}  Ix={:8.5f}  "
+                "Iy_beam={:9.5f}  J={:7.4f}".format(
+                    p["z"], p["zbar"], p["A"], p["Ix"], p["Iy"], p["J"]))
 
-        # --------------------------------------------------
-        # POSISI GARIS BARU
-        # --------------------------------------------------
-        print(
-            "  posisi garis baru :",
-            [round(p["z"], 4) for p in props],
-        )
+        print("  KONSERVASI (jumlah / target):")
+        for nama in ("A", "Ix", "Iy", "J"):
+            print("    {:<3} = {:.6f} / {:.6f}  ratio={:.8f}".format(
+                nama, r["sum_" + nama], r["target_" + nama],
+                r["ratio_" + nama]))
+        print("    Iy = sum(Iy_i + A_i*z_node^2); offset node maks "
+              "{:.4f} m".format(r["max_offset_node"]))
 
-        print(
-            "  centroid z check  :",
-            [round(p["zbar"], 4) for p in props],
-        )
+        print("  ELEMEN MELINTANG (dx = 1.0, antar node):")
+        for s_ in properti_melintang(1.0, tipe, Z_NODE):
+            print("    [{:5.2f},{:5.2f}] d_eq={:.3f} Iz/dx={:.5f} J={:.5f}"
+                  .format(s_["z1"], s_["z2"], s_["d_eq"], s_["Iz"], s_["J"]))
 
-        # --------------------------------------------------
-        # AUDIT PROPERTI TOTAL
-        # --------------------------------------------------
-        print("  GEOMETRI:")
-
-        for prop in ["A", "Ix", "Iy"]:
-            print(
-                f"    {prop:<3} = "
-                f"{r[f'sum_{prop}']:.6f} / "
-                f"{r[f'target_{prop}']:.6f}  "
-                f"ratio={r[f'ratio_{prop}']:.8f}"
-            )
-
-        print(
-            f"    J   = "
-            f"{r['target_J']:.6f}"
-        )
-
-        # --------------------------------------------------
-        # PARALLEL-AXIS CHECK
-        # --------------------------------------------------
-        print("  PARALLEL-AXIS CHECK:")
-        print(
-            f"    Ix reconstructed = "
-            f"{r['sum_Ix_reconstructed']:.6f}"
-        )
-        print(
-            f"    Iy reconstructed = "
-            f"{r['sum_Iy_reconstructed']:.6f}"
-        )
-
-    # ======================================================
-    # PROPERTI ELEMEN MELINTANG
-    # ======================================================
-    print("=" * 70)
-
-    for s in properti_melintang(1.0, tipe):
-        print(
-            "  melintang [{:5.1f},{:5.1f}] "
-            "d_rata={:.3f} d_eq={:.3f} "
-            "Iz/dx={:.5f}".format(
-                s["z1"],
-                s["z2"],
-                s["d_rata"],
-                s["d_eq"],
-                s["Iz"],
-            )
-        )
+    # guard: koordinat node tidak boleh dipakai sebagai z_ref
+    try:
+        properti_garis("hollow", contoh["hollow"], Z_NODE)
+    except ValueError as err:
+        print("\nGuard z_ref OK ->", str(err)[:60], "...")

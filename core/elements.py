@@ -18,6 +18,11 @@ Perubahan utama dibanding versi sebelumnya:
 - Tipe section dicari dari titik tengah segmen (tidak perlu persis sama
   dengan SECTION_MAP).
 - E, G diimpor dari materials.py.
+- z_ref (batas tributary) dan z_garis (posisi fisik node) dipisah.
+  Iy tiap garis dihitung terhadap posisi node, sehingga
+  sum(Iy_i + A_i*z_node^2) = Iy total.
+- Elemen melintang memakai tipe section di stasiun dan koordinat node
+  (sebelumnya z_garis terbaca sebagai argumen `tipe`).
 
 Sumbu lokal:
 - Memanjang : vecxz = (0,0,1) -> y lokal = y global (vertikal);
@@ -101,7 +106,8 @@ def buat_elemen_memanjang(node_result, section_map, box_sections,
     """
     node_map = node_result["node_map"]
     stasiun = node_result["stasiun"]
-    z_garis = node_result["z_garis"]
+    z_garis = node_result["z_garis"]                       # posisi node
+    z_ref = node_result.get("z_ref", strips.Z_GARIS_DEFAULT)  # batas strip
 
     # properti per tipe per garis (hitung sekali)
     cache = {}
@@ -109,7 +115,7 @@ def buat_elemen_memanjang(node_result, section_map, box_sections,
     def props(tipe):
         if tipe not in cache:
             cache[tipe] = strips.properti_garis(
-                tipe, box_sections[tipe], z_garis)
+                tipe, box_sections[tipe], z_ref, z_garis)
         return cache[tipe]
 
     elemen_list = []
@@ -144,10 +150,11 @@ def buat_elemen_memanjang(node_result, section_map, box_sections,
     return elemen_list
 
 
-def buat_elemen_melintang(node_result, E=E_BOX, G=G_BOX):
+def buat_elemen_melintang(node_result, section_map, E=E_BOX, G=G_BOX):
     """
     Buat elemen melintang di setiap stasiun (termasuk kedua sisi EJ).
-    Properti dari jalur selebar dx.
+    Properti dari jalur selebar dx, tipe section di x stasiun, dan
+    profil d(z) antar node (z_garis).
     """
     node_map = node_result["node_map"]
     stasiun = node_result["stasiun"]
@@ -161,7 +168,8 @@ def buat_elemen_melintang(node_result, E=E_BOX, G=G_BOX):
         if dx <= 0:
             raise ValueError("Stasiun {} (x={}) tanpa lebar tributari."
                              .format(i, st["x"]))
-        sp = strips.properti_melintang(dx, z_garis)
+        tipe = cari_tipe_di_x(st["x"], section_map)
+        sp = strips.properti_melintang(dx, tipe, z_garis)
 
         for j in range(len(z_garis) - 1):
             n1 = node_map[(i, j)]
@@ -194,7 +202,7 @@ def buat_semua_elemen(node_result, section_map, box_sections):
     define_geom_transf()
 
     memanjang = buat_elemen_memanjang(node_result, section_map, box_sections)
-    melintang = buat_elemen_melintang(node_result)
+    melintang = buat_elemen_melintang(node_result, section_map)
 
     return {
         "memanjang": memanjang,
@@ -253,24 +261,26 @@ def print_elemen_sample(result, n=5):
 
 
 def print_verifikasi_properti(result, box_sections, section_map):
-    """Jumlah A/Ix/J semua garis per segmen harus sama dengan total tipe."""
+    """Jumlah A/Ix/J dan Iy+A*z_node^2 semua garis per segmen = total tipe."""
     print("=" * 75)
     print("VERIFIKASI: JUMLAH PROPERTI GARIS vs TOTAL TIPE")
     print("=" * 75)
     per_seg = {}
     for e in result["memanjang"]:
         k = (e["x1"], e["x2"])
-        a = per_seg.setdefault(k, {"A": 0.0, "Ix": 0.0, "J": 0.0,
+        a = per_seg.setdefault(k, {"A": 0.0, "Ix": 0.0, "Iy": 0.0, "J": 0.0,
                                    "tipe": e["tipe_section"]})
         a["A"] += e["A"]
         a["Ix"] += e["Ix"]
+        a["Iy"] += e["Iy"] + e["A"] * e["z"] ** 2   # z = posisi node aktual
         a["J"] += e["J"]
     maks = 0.0
     for k, a in per_seg.items():
         tot = box_sections[a["tipe"]]
-        for nama in ("A", "Ix", "J"):
+        for nama in ("A", "Ix", "Iy", "J"):
             maks = max(maks, abs(a[nama] / tot[nama] - 1.0))
-    print("  Selisih relatif maksimum: {:.2e}".format(maks))
+    print("  Selisih relatif maksimum (A, Ix, Iy+A*z^2, J): {:.2e}".format(
+        maks))
     print()
 
 
