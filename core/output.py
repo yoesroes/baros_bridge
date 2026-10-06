@@ -142,7 +142,7 @@ def print_reaksi(hasil, Lenv, urutan, kombinasi_list):
     print()
 
 
-def print_gaya_dalam(hasil, Lenv, elemen_result, kombinasi="Kuat I"):
+def print_gaya_dalam(hasil, Lenv, elemen_result, kombinasi="Strength I"):
     """Ekstrem Mz dan Vy per garis memanjang untuk satu kombinasi."""
     env = kombinasi_envelope(hasil, Lenv, kombinasi)
     ele = {e["tag"]: e for e in elemen_result["memanjang"]}
@@ -175,7 +175,7 @@ def print_gaya_dalam(hasil, Lenv, elemen_result, kombinasi="Kuat I"):
     print()
 
 def plot_gaya_dalam(hasil, Lenv, elemen_result, out_dir,
-                    kombinasi="Kuat I"):
+                    kombinasi="Strength I"):
     """
     Plot envelope gaya dalam satu kombinasi untuk 5 garis memanjang.
 
@@ -334,7 +334,7 @@ def plot_gaya_dalam(hasil, Lenv, elemen_result, out_dir,
         mode="abs"
     )
 
-def print_lendutan(hasil, Lenv, node_result, kombinasi="Daya Layan I"):
+def print_lendutan(hasil, Lenv, node_result, kombinasi="Service I"):
     """Lendutan vertikal terbesar ke bawah dan ke atas."""
     env = kombinasi_envelope(hasil, Lenv, kombinasi)["Uy"]
     pos = {}
@@ -408,18 +408,18 @@ def laporan(hasil, kasus, node_result, bc_list, bentang, out_dir,
     urutan = tambah_reaksi_support(hasil, bc_list)
     Lenv = envelope_hidup(hasil, kasus)
 
-    print_reaksi(hasil, Lenv, urutan, ["Daya Layan I", "Kuat I"])
-    print_lendutan(hasil, Lenv, node_result, "Daya Layan I")
+    print_reaksi(hasil, Lenv, urutan, ["Service I", "Strength I"])
+    print_lendutan(hasil, Lenv, node_result, "Service I")
 
     if elemen_result is not None:
-        print_gaya_dalam(hasil, Lenv, elemen_result, "Kuat I")
+        print_gaya_dalam(hasil, Lenv, elemen_result, "Strength I")
 
         plot_gaya_dalam(
             hasil,
             Lenv,
             elemen_result,
             out_dir,
-            kombinasi="Kuat I"
+            kombinasi="Strength I"
         )
 
     simpan_reaksi(os.path.join(out_dir, "reaksi.json"),

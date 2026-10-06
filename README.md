@@ -71,9 +71,19 @@ baros_bridge/
 - [x] Mapping penampang sepanjang bentang (38 segmen)
 - [x] Pemodelan Grillage 3D (Node, Elemen, Boundary Condition)
 - [x] Definisi beban (SNI 1725) dan material
-- [ ] Eksekusi analisis statis & validasi keseimbangan gaya (Reaksi = Beban)
-- [ ] Pemodelan substruktur (Pile cap, Bored pile, p-y curve tanah)
-- [ ] Analisis dinamis & pushover
+- [x] **Eksekusi analisis statis & validasi keseimbangan gaya (Reaksi = Beban)** ✅
+- [ ] Visualisasi gaya-gaya dalam (Momen, Geser, Torsi) dan respons perletakan
+- [ ] Perbaikan bug pada modul `output.py`
+- [ ] Penambahan *automated test* untuk validasi hasil analisis
+
+---
+
+## 🏗️ Catatan Arsitektur Repositori (Pemisahan Scope)
+
+Repositori ini difokuskan secara khusus pada **pemodelan dan analisis global Grillage 3D** serta validasi keseimbangan gaya makro. Untuk menjaga modularitas, kebersihan kode, dan *single responsibility principle*, perhitungan detail berikut dikelola di repositori terpisah:
+
+1. **Desain Gaya Prategang (Prestressing):** Perhitungan kebutuhan tendon, profil kabel, dan verifikasi tegangan SLS/ULS dikerjakan di repositori khusus prategang.
+2. **Desain Detail Substruktur & Superstruktur:** Perhitungan kapasitas penampang lokal, *pile cap*, *bored pile*, dan analisis *p-y curve* tanah tidak disatukan dalam repositori besar ini. Repositori ini hanya bertugas menyediakan output reaksi tumpuan yang akurat sebagai *input* bagi modul desain terpisah tersebut.
 
 ## Catatan Teknis
 - **Konsistensi Satuan**: Model OpenSeesPy menggunakan **kN** dan **m**. Pastikan hasil ekstraksi dari `sectionproperties` (yang sering kali dalam mm) dikonversi ke meter sebelum dimasukkan ke dalam model.

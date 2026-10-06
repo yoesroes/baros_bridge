@@ -361,28 +361,67 @@ def cek_distribusi(elemen_data, tol=1e-6):
 # ============================================================
 
 KOMBINASI = {
-    # Service (Daya Layan)
-    "Daya Layan I":   {"D1": 1.0, "D2": 1.0, "L": 1.0, "P": 1.0},
-    "Daya Layan II":  {"D1": 1.0, "D2": 1.0, "L": 1.3, "P": 1.0},
-    "Daya Layan III": {"D1": 1.0, "D2": 1.0, "L": 0.8, "P": 1.0},
-    "Daya Layan IV":  {"D1": 1.0, "D2": 1.0, "L": 0.0, "P": 1.0},
+    # ========================================================
+    # SERVICE
+    # ========================================================
+    "Service I": {
+        "D1": 1.0, "D2": 1.0, "L": 1.0, "P": 1.0,
+        "description": "D1 + D2 + L + P",
+    },
+    "Service II": {
+        "D1": 1.0, "D2": 1.0, "L": 1.3, "P": 1.0,
+        "description": "D1 + D2 + 1.3L + P",
+    },
+    "Service III": {
+        "D1": 1.0, "D2": 1.0, "L": 0.8, "P": 1.0,
+        "description": "D1 + D2 + 0.8L + P",
+    },
+    "Service IV": {
+        "D1": 1.0, "D2": 1.0, "L": 0.0, "P": 1.0,
+        "description": "D1 + D2 + P",
+    },
 
-    # Ultimate (Kuat)
-    "Kuat I":   {"D1": 1.2, "D2": 2.0, "L": 1.8, "P": 1.0},
-    "Kuat II":  {"D1": 1.2, "D2": 2.0, "L": 1.4, "P": 1.0},
-    "Kuat III": {"D1": 1.2, "D2": 2.0, "L": 0.0, "P": 1.0},
-    "Kuat IV":  {"D1": 1.2, "D2": 2.0, "L": 0.0, "P": 1.0},
-    "Kuat V":   {"D1": 1.2, "D2": 2.0, "L": 0.0, "P": 1.0},
+    # ========================================================
+    # STRENGTH
+    # ========================================================
+    "Strength I": {
+        "D1": 1.2, "D2": 2.0, "L": 1.8, "P": 1.0,
+        "description": "1.2D1 + 2.0D2 + 1.8L + P",
+    },
+    "Strength II": {
+        "D1": 1.2, "D2": 2.0, "L": 1.4, "P": 1.0,
+        "description": "1.2D1 + 2.0D2 + 1.4L + P",
+    },
+    "Strength III": {
+        "D1": 1.2, "D2": 2.0, "L": 0.0, "P": 1.0,
+        "description": "1.2D1 + 2.0D2 + P + EWs",
+    },
+    "Strength IV": {
+        "D1": 1.2, "D2": 2.0, "L": 0.0, "P": 1.0,
+        "description": "1.2D1 + 2.0D2 + P",
+    },
+    "Strength V": {
+        "D1": 1.2, "D2": 2.0, "L": 0.0, "P": 1.0,
+        "description": "1.2D1 + 2.0D2 + P + EWs + EWL",
+    },
 
-    # Ekstrem (Gempa)
-    "Ekstrem Ia": {"D1": 1.0, "D2": 1.0, "L": 0.3, "P": 1.0, "EQ": 1.0},
-    "Ekstrem Ib": {"D1": 1.0, "D2": 1.0, "L": 0.3, "P": 1.0, "EQ": 1.0},
+    # ========================================================
+    # EXTREME EVENT
+    # ========================================================
+    "Extreme Event I": {
+        "D1": 1.0, "D2": 1.0, "L": 0.3, "P": 1.0, "EQ": 1.0,
+        "description": "D1 + D2 + 0.3L + P + EQ",
+    },
+    "Extreme Event II": {
+        "D1": 1.0, "D2": 1.0, "L": 0.3, "P": 1.0, "EQ": 1.0,
+        "description": "D1 + D2 + 0.3L + P + EQ",
+    },
 }
 
 
 def hitung_w_kombinasi(w_box, w_non_struktur, w_hidup,
                        w_prategang=0.0, w_gempa=0.0,
-                       kombinasi="Daya Layan I"):
+                       kombinasi="Service I"):
     """
     Beban MERATA kombinasi (kN/m): D1*w_box + D2*w_non_struktur
     + L*w_hidup(BTR) + P*w_prategang + EQ*w_gempa.
@@ -402,14 +441,14 @@ def hitung_w_kombinasi(w_box, w_non_struktur, w_hidup,
     )
 
 
-def hitung_P_kombinasi(P_kel, kombinasi="Daya Layan I"):
+def hitung_P_kombinasi(P_kel, kombinasi="Service I"):
     """Beban terpusat KEL terfaktor (kN) untuk kombinasi tertentu."""
     if kombinasi not in KOMBINASI:
         raise ValueError("Kombinasi tidak dikenal: {}".format(kombinasi))
     return KOMBINASI[kombinasi].get("L", 0) * P_kel
 
 
-def hitung_kombinasi_garis(ele, kombinasi="Kuat I"):
+def hitung_kombinasi_garis(ele, kombinasi="Strength I"):
     """
     Beban terfaktor per garis untuk satu segmen.
     Return: {"w": [kN/m per garis], "P": [kN per garis]}
