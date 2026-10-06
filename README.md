@@ -78,7 +78,7 @@ baros_bridge/
 
 ---
 
-## 🏗️ Catatan Arsitektur Repositori (Pemisahan Scope)
+## Catatan Arsitektur Repositori (Pemisahan Scope)
 
 Repositori ini difokuskan secara khusus pada **pemodelan dan analisis global Grillage 3D** serta validasi keseimbangan gaya makro. Untuk menjaga modularitas, kebersihan kode, dan *single responsibility principle*, perhitungan detail berikut dikelola di repositori terpisah:
 
