@@ -730,8 +730,7 @@ def save_csv_garis(elemen_data, filename="output/loads_garis.csv"):
 if __name__ == "__main__":
     # core/loads.py -> root proyek = satu tingkat di atas core/
     BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    sys.path.append(os.path.join(BASE_DIR, "Clean"))
-    import project_data as pdata
+    from project import project_data as pdata
 
     # Bentang (m) dari README; ganti dengan pdata.SPANS bila formatnya list panjang
     BENTANG = [16.2472, 17.5, 17.5, 23.5, 38.0, 17.5, 25.0, 25.0, 24.2472]

@@ -6,4 +6,4 @@ scipy>=1.10
 matplotlib>=3.5
 shapely>=2.0
 triangle>=20220202
-cad-to-shapely>=0.5
+cad-to-shapely>=0.3.3

@@ -143,7 +143,12 @@ def print_reaksi(hasil, Lenv, urutan, kombinasi_list):
 
 
 def print_gaya_dalam(hasil, Lenv, elemen_result, kombinasi="Strength I"):
-    """Ekstrem Mz dan Vy per garis memanjang untuk satu kombinasi."""
+    """
+    Ekstrem Mz dan Vy per garis memanjang untuk satu kombinasi.
+    Mz memakai konvensi sagging positif: M = -Mz_i di ujung-i dan
+    M = +Mz_j di ujung-j (eleForce memberi gaya ujung elemen, sehingga
+    Mz_i dan Mz_j untuk momen internal yang sama berlawanan tanda).
+    """
     env = kombinasi_envelope(hasil, Lenv, kombinasi)
     ele = {e["tag"]: e for e in elemen_result["memanjang"]}
 
@@ -162,6 +167,8 @@ def print_gaya_dalam(hasil, Lenv, elemen_result, kombinasi="Strength I"):
         for t in tags:
             for cat, sisi in (("Mz_i", "x1"), ("Mz_j", "x2")):
                 lo, hi = env[cat][t]
+                if cat == "Mz_i":          # ujung-i: tanda dibalik (sagging +)
+                    lo, hi = -hi, -lo
                 if lo < mz_min[0]:
                     mz_min = (lo, ele[t][sisi])
                 if hi > mz_max[0]:
@@ -206,7 +213,7 @@ def plot_gaya_dalam(hasil, Lenv, elemen_result, out_dir,
     # --------------------------------------------------------
     # Helper: susun titik sepanjang satu garis
     # --------------------------------------------------------
-    def data_garis(j, cat_i, cat_j):
+    def data_garis(j, cat_i, cat_j, flip_i=False):
         data = []
 
         tags = sorted(
@@ -217,9 +224,10 @@ def plot_gaya_dalam(hasil, Lenv, elemen_result, out_dir,
         for t in tags:
             e = ele[t]
 
-            data.append(
-                (e["x1"], env[cat_i][t][0], env[cat_i][t][1])
-            )
+            lo_i, hi_i = env[cat_i][t]
+            if flip_i:                     # sagging positif
+                lo_i, hi_i = -hi_i, -lo_i
+            data.append((e["x1"], lo_i, hi_i))
 
             data.append(
                 (e["x2"], env[cat_j][t][0], env[cat_j][t][1])
@@ -233,11 +241,12 @@ def plot_gaya_dalam(hasil, Lenv, elemen_result, out_dir,
     # --------------------------------------------------------
     # Plot satu besaran
     # --------------------------------------------------------
-    def plot_env(cat_i, cat_j, ylabel, filename, mode="signed"):
+    def plot_env(cat_i, cat_j, ylabel, filename, mode="signed",
+                 flip_i=False):
         fig, ax = plt.subplots(figsize=(14, 6))
 
         for j in garis:
-            data = data_garis(j, cat_i, cat_j)
+            data = data_garis(j, cat_i, cat_j, flip_i)
 
             xs = [p[0] for p in data]
 
@@ -307,9 +316,10 @@ def plot_gaya_dalam(hasil, Lenv, elemen_result, out_dir,
     plot_env(
         "Mz_i",
         "Mz_j",
-        "Mz (kNm)",
+        "Mz (kNm), + = sagging",
         "Mz_{}.png".format(kombinasi.replace(" ", "_")),
-        mode="signed"
+        mode="signed",
+        flip_i=True
     )
 
     # --------------------------------------------------------
@@ -398,6 +408,155 @@ def simpan_reaksi(path_json, path_csv, hasil, Lenv, urutan, bentang,
     print("CSV disimpan: {}".format(path_csv))
 
 
+def _nilai_envelope(env, kategori, tag):
+    """Ambil envelope (min, max) untuk satu tag dari hasil kombinasi."""
+    values = env.get(kategori, {})
+    if tag not in values:
+        raise KeyError("Tag {} tidak ditemukan untuk {}".format(tag, kategori))
+    return values[tag]
+
+
+def simpan_gaya_dalam(path_csv, elemen_result, env):
+    """
+    Simpan gaya dalam setiap elemen memanjang ke CSV.
+    Kolom Mz/Vy/T adalah gaya UJUNG ELEMEN mentah (lokal OpenSees):
+    untuk momen internal yang sama Mz_i dan Mz_j berlawanan tanda.
+    Sagging positif: M = -Mz_i (ujung-i), M = +Mz_j (ujung-j).
+    """
+    folder = os.path.dirname(path_csv)
+    if folder:
+        os.makedirs(folder, exist_ok=True)
+
+    elemen = elemen_result.get("memanjang", [])
+    garis = sorted({e["garis"] for e in elemen})
+    if not elemen:
+        raise ValueError("Tidak ada elemen memanjang untuk disimpan.")
+
+    header = [
+        "tag", "garis", "z", "x1", "x2",
+        "Mz_i_min", "Mz_i_max", "Mz_j_min", "Mz_j_max",
+        "Vy_i_min", "Vy_i_max", "Vy_j_min", "Vy_j_max",
+        "T_i_min", "T_i_max",
+    ]
+
+    with open(path_csv, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(header)
+        for e in elemen:
+            tag = e["tag"]
+            vals = {
+                cat: _nilai_envelope(env, cat, tag)
+                for cat in KATEGORI_GAYA
+            }
+            w.writerow([
+                tag, e["garis"], e["z"], e["x1"], e["x2"],
+                vals["Mz_i"][0], vals["Mz_i"][1],
+                vals["Mz_j"][0], vals["Mz_j"][1],
+                vals["Vy_i"][0], vals["Vy_i"][1],
+                vals["Vy_j"][0], vals["Vy_j"][1],
+                vals["T_i"][0], vals["T_i"][1],
+            ])
+
+    print("CSV gaya dalam per elemen disimpan: {}".format(path_csv))
+    print("Jumlah garis longitudinal: {}".format(len(garis)))
+
+
+def hasil_total_segmen(hasil, elemen_result):
+    """
+    Jumlahkan gaya ujung kelima garis per segmen, untuk SETIAP kasus dasar.
+    Key = (x1, x2, unit). Penjumlahan dilakukan per kasus SEBELUM envelope,
+    supaya ekstrem total berasal dari kasus beban yang sama (simultan).
+    """
+    seg = {}
+    for e in elemen_result["memanjang"]:
+        seg.setdefault((e["x1"], e["x2"], e["unit"]), []).append(e["tag"])
+    total = {}
+    for nama, h in hasil.items():
+        total[nama] = {
+            cat: {k: sum(h[cat][t] for t in tags) for k, tags in seg.items()}
+            for cat in KATEGORI_GAYA
+        }
+    return total, seg
+
+
+def _ujung_total(env, key, ujung):
+    """((M_min, M_max), (V_min, V_max)) di satu ujung segmen; M sagging +."""
+    if ujung == "i":
+        lo, hi = env["Mz_i"][key]
+        return (-hi, -lo), env["Vy_i"][key]
+    lo, hi = env["Vy_j"][key]
+    return env["Mz_j"][key], (-hi, -lo)
+
+
+def simpan_gaya_dalam_total(path_csv, elemen_result, hasil, kasus,
+                            kombinasi_list=None):
+    """
+    Gaya dalam TOTAL penampang (jumlah 5 garis) per stasiun dan unit.
+
+    Envelope dihitung pada gaya total per kasus (bukan jumlah envelope
+    per garis). Stasiun EJ dipisah per unit. Momen: sagging positif.
+    Vy: Vy_kiri dari ujung-j segmen kiri (tanda dibalik), Vy_kanan dari
+    ujung-i segmen kanan; keduanya berbeda di tumpuan (loncatan = reaksi).
+    """
+    folder = os.path.dirname(path_csv)
+    if folder:
+        os.makedirs(folder, exist_ok=True)
+    if not elemen_result.get("memanjang"):
+        raise ValueError("Tidak ada elemen memanjang untuk disimpan.")
+
+    if kombinasi_list is None:
+        kombinasi_list = [k for k in loads.KOMBINASI
+                          if "Extreme" not in k]
+
+    total, seg = hasil_total_segmen(hasil, elemen_result)
+    Lenv = envelope_hidup(total, kasus)
+    env_k = {k: kombinasi_envelope(total, Lenv, k) for k in kombinasi_list}
+
+    stasiun = {}                      # (x, unit) -> {"kiri": key, "kanan": key}
+    for key in seg:
+        x1, x2, unit = key
+        stasiun.setdefault((round(x1, 6), unit), {})["kanan"] = key
+        stasiun.setdefault((round(x2, 6), unit), {})["kiri"] = key
+
+    def ekstrem(key, ujung, idx_mv, idx_mm):
+        """Cari (nilai, kombinasi) terkecil/terbesar di semua kombinasi."""
+        if key is None:
+            return None, ""
+        cands = []
+        for k in kombinasi_list:
+            m, v = _ujung_total(env_k[k], key, ujung)
+            cands.append(((m, v)[idx_mv][idx_mm], k))
+        return (min if idx_mm == 0 else max)(cands, key=lambda c: c[0])
+
+    rows = []
+    for (x, unit) in sorted(stasiun):
+        st = stasiun[(x, unit)]
+        kn, kr = st.get("kanan"), st.get("kiri")
+        key_m, uj_m = (kn, "i") if kn else (kr, "j")      # momen menerus
+        r = [x, unit]
+        r += list(ekstrem(key_m, uj_m, 0, 0))
+        r += list(ekstrem(key_m, uj_m, 0, 1))
+        for key, uj in ((kr, "j"), (kn, "i")):            # Vy kiri, kanan
+            r += list(ekstrem(key, uj, 1, 0))
+            r += list(ekstrem(key, uj, 1, 1))
+        rows.append(r)
+
+    with open(path_csv, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow([
+            "x", "unit",
+            "Mz_total_min", "Mz_total_min_kombinasi",
+            "Mz_total_max", "Mz_total_max_kombinasi",
+            "Vy_kiri_min", "Vy_kiri_min_kombinasi",
+            "Vy_kiri_max", "Vy_kiri_max_kombinasi",
+            "Vy_kanan_min", "Vy_kanan_min_kombinasi",
+            "Vy_kanan_max", "Vy_kanan_max_kombinasi",
+        ])
+        w.writerows(rows)
+
+    print("CSV gaya dalam total disimpan: {}".format(path_csv))
+
+
 # ============================================================
 # 5. LAPORAN LENGKAP
 # ============================================================
@@ -422,8 +581,21 @@ def laporan(hasil, kasus, node_result, bc_list, bentang, out_dir,
             kombinasi="Strength I"
         )
 
+        env = kombinasi_envelope(hasil, Lenv, "Strength I")
+        simpan_gaya_dalam(
+            os.path.join(out_dir, "gaya_dalam.csv"),
+            elemen_result,
+            env,
+        )
+        simpan_gaya_dalam_total(
+            os.path.join(out_dir, "gaya_dalam_total.csv"),
+            elemen_result,
+            hasil,
+            kasus,
+        )
+
     simpan_reaksi(os.path.join(out_dir, "reaksi.json"),
                   os.path.join(out_dir, "reaksi.csv"),
                   hasil, Lenv, urutan, bentang,
-                  [k for k in loads.KOMBINASI if "Ekstrem" not in k])
+                  [k for k in loads.KOMBINASI if "Extreme" not in k])
     return Lenv, urutan

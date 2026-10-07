@@ -10,14 +10,10 @@ Repositori ini berisi skrip dan data untuk analisis struktur jembatan flyover be
 
 ## Struktur Direktori
 ```text
-baros_bridge/
-├── Clean/              # Single source of truth (project_data.py, mapping)
-├── core/               # Modul analisis utama (loads, materials, sections, nodes, elements, BC)
-├── components/         # Definisi komponen struktur (box_girder, pier, pile_cap, dll.)
-├── Temp/               # Script eksperimen & utilitas (ekstraksi DXF, hitung J, visualisasi)
-├── output/             # Hasil analisis (CSV, JSON, model FreeCAD)
-├── docs/               # Catatan perubahan dan dokumentasi tambahan
-└── data/DXF/           # File sumber DXF (tidak di-commit)
+├── project/            # Data proyek & material (single source of truth)
+│   ├── project_data.py
+│   └── materials.py
+├── core/               # Modul analisis utama (loads, sections, nodes, elements, BC)
 ```
 
 ## Persiapan & Instalasi
@@ -48,8 +44,7 @@ baros_bridge/
 2. **Verifikasi Data Proyek**  
    Pastikan data ter-load dengan benar dari *single source of truth*:
    ```bash
-   cd Clean
-   python3 -c "import project_data as pd; print('Total bentang:', len(pd.SPANS))"
+   python3 -c "from project import project_data as pd; print('Total bentang:', len(pd.SPANS))"
    ```
 
 3. **Pemodelan & Analisis OpenSeesPy**  
@@ -57,7 +52,6 @@ baros_bridge/
    ```bash
    cd core
    python3 loads.py
-   python3 materials.py
    python3 sections.py
    python3 nodes.py
    python3 elements.py

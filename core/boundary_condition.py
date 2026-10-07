@@ -173,10 +173,8 @@ def print_bc_per_support(bc_list):
 
 if __name__ == "__main__":
     BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    sys.path.append(os.path.join(BASE_DIR, "Clean"))
-    sys.path.append(os.path.join(BASE_DIR, "core"))
-
-    import project_data as pdata
+    from project import project_data as pdata
+    
     import nodes
 
     ops.wipe()

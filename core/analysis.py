@@ -254,15 +254,11 @@ def jalankan_semua(kasus, node_result, elemen_result, bc_list, verbose=True):
 # ============================================================
 
 if __name__ == "__main__":
-    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    sys.path.append(os.path.join(BASE_DIR, "Clean"))
-    sys.path.append(os.path.join(BASE_DIR, "core"))
-
-    import project_data as pdata
-    import nodes
-    import elements
-    import boundary_condition as bc
-    import output
+    
+    from project import project_data as pdata
+    from core import nodes
+    from core import elements
+    from core import boundary_condition as bc
 
     ops.wipe()
     ops.model('basic', '-ndm', 3, '-ndf', 6)
