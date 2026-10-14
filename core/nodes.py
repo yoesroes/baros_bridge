@@ -1,12 +1,15 @@
 # core/nodes.py
 """
 Modul Node untuk Jembatan Baros (Grillage 3D).
-Satuan: m.
+Satuan: m.  Model: ndm = 3, ndf = 6.
+
+STATUS: [AKTIF] langkah pertama pipeline:
+    nodes -> elements -> boundary_condition -> (loads) -> analysis -> output
 
 Generate node grillage:
 - x = memanjang (dari SECTION_MAP + support)
-- y = 0 (bidang netral)
-- z = transversal (5 garis)
+- y = 0 (bidang netral; grillage planar, semua garis satu elevasi)
+- z = transversal (5 garis, = centroid strip tributary tipe hollow)
 
 Expansion joint (EJ) di P2 dan P7 MEMUTUS gelagar: pada x tersebut dibuat
 DUA stasiun (sisi kiri 'L' = ujung unit sebelumnya, sisi kanan 'R' = awal
@@ -18,13 +21,27 @@ elemen memanjang di antara keduanya. Hasilnya 3 unit menerus:
 
 Jumlah node dan elemen mengikuti data (jangan ditulis tetap di docstring).
 
+Penomoran tag node: berurutan 1..n, stasiun demi stasiun (x naik), di tiap
+stasiun garis j = 0..4 (z naik). Pemetaan tag ada di node_map[(i, j)].
+
+CATATAN AUDIT
+-------------
+1. Posisi z node SATU set (centroid strip hollow) dipakai untuk SEMUA tipe
+   section; properti tiap tipe dihitung terhadap posisi itu
+   (section_strips.properti_garis(..., z_node=Z_GARIS)).
+2. Stasiun dibentuk dari SELURUH x1/x2 SECTION_MAP + x SUPPORTS (dibulatkan
+   6 desimal). Dua x yang berbeda < 1e-6 m akan dianggap sama.
+3. Stasiun dibuat juga di overhang (x = -0.27 dan x > x A2); tidak ada
+   tumpuan di sana.
+4. EJ_SUPPORTS = ("P2", "P7") tertulis tetap di sini; EXPANSION_JOINTS di
+   project_data (EJ.1-EJ.4) tidak dibaca.
+5. Menjalankan langsung: python -m core.nodes (dari root repo).
+
 Referensi:
 - project_data.SECTION_MAP
 - project_data.SUPPORTS
 """
 
-import os
-import sys
 import openseespy.opensees as ops
 
 try:
@@ -38,6 +55,10 @@ except ImportError:
         z_garis_centroid,
     )
 
+try:
+    from project import project_data as pdata
+except ImportError:
+    import project_data as pdata
 
 # ============================================================
 # 1. KONSTANTA
@@ -55,6 +76,28 @@ Z_GARIS = z_garis_centroid(
 
 N_Z = len(Z_GARIS)
 Y_BIDANG = 0.0   # bidang netral
+
+def elevasi_model(x):
+    """Elevasi node relatif terhadap elevasi A1, interpolasi antar-support."""
+    supports = sorted(
+        (float(v["x"]), float(v["y"]))
+        for v in pdata.SUPPORTS.values()
+    )
+
+    datum = float(pdata.SUPPORTS["A1"]["y"])
+
+    if x <= supports[0][0]:
+        return supports[0][1] - datum
+
+    if x >= supports[-1][0]:
+        return supports[-1][1] - datum
+
+    for (x0, y0), (x1, y1) in zip(supports, supports[1:]):
+        if x0 <= x <= x1:
+            t = (x - x0) / (x1 - x0)
+            return y0 + t * (y1 - y0) - datum
+
+    raise ValueError("Elevasi tidak ditemukan untuk x={}".format(x))
 
 EJ_SUPPORTS = ("P2", "P7")   # support dengan expansion joint (gelagar putus)
 
@@ -131,7 +174,7 @@ def buat_node(stasiun, z_garis=Z_GARIS):
         x_index.setdefault(st["x"], []).append(i)
         for j, z in enumerate(z_garis):
             tag += 1
-            ops.node(tag, st["x"], Y_BIDANG, z)
+            ops.node(tag, st["x"], elevasi_model(st["x"]), z)
             node_map[(i, j)] = tag
 
     return node_map, x_index
@@ -194,7 +237,11 @@ def print_node_info(result):
         stasiun[0]["x"], stasiun[-1]["x"]))
     print("  z garis (node)   : {}".format(z_garis))
     print("  z_ref (tributary): {}".format(result["z_ref"]))
-    print("  y (bidang)       : {:.2f} m".format(Y_BIDANG))
+
+    y_node = [ops.nodeCoord(tag)[1] for tag in ops.getNodeTags()]
+    print("  y (relatif A1)   : {:.4f} -> {:.4f} m".format(
+        min(y_node), max(y_node)))
+
     ej = [(s["x"], s["unit"]) for s in stasiun if s["sisi"]]
     print("  Stasiun EJ (x, unit): {}".format(ej))
     print()
@@ -217,8 +264,9 @@ def print_node_sample(result, n=15):
     for (i, j), tag in sorted(node_map.items()):
         if count >= n:
             break
+        coord = ops.nodeCoord(tag)
         print("{:>6d} {:>10.4f} {:>10.4f} {:>10.4f} {:>6d}".format(
-            tag, stasiun[i]["x"], Y_BIDANG, z_garis[j], stasiun[i]["unit"]))
+            tag, coord[0], coord[1], coord[2], stasiun[i]["unit"]))
         count += 1
     print()
 
@@ -248,7 +296,7 @@ def print_node_statistik(result):
 # ============================================================
 
 if __name__ == "__main__":
-    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # Jalankan dari root repo:  python -m core.nodes
     from project import project_data as pdata
 
     ops.wipe()

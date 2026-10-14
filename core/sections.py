@@ -1,38 +1,50 @@
 # core/sections.py
 """
-Modul Section untuk Jembatan Baros.
+Pembaca properti section TOTAL (penampang penuh) dari BOX_SECTIONS.
 Satuan: kN, m, kPa.
 
-Section deck (elastis):
-- A  : luas penampang (m²)
-- Ix : momen inersia terhadap sumbu horizontal -> lentur VERTIKAL (m⁴)
-- Iy : momen inersia terhadap sumbu vertikal -> lentur LATERAL (m⁴)
-- J  : konstanta torsi (m⁴)
+STATUS: [LEGACY / MANDIRI] Modul ini TIDAK dipakai pipeline grillage
+(nodes -> elements -> boundary_condition -> loads -> analysis -> output).
+elements.py memakai section_strips.properti_garis(), yang membaca
+BOX_SECTIONS langsung dan membagi total ke 5 garis memanjang.
+Modul ini hanya untuk melihat/mencetak total per tipe dan cek manual.
 
-Section diambil dari project_data.BOX_SECTIONS.
-J dari analisis penampang (BOX_SECTIONS[tipe]['J']).
+Properti total deck (penampang penuh, 1 balok ekuivalen):
+- A  : luas penampang (m2)
+- Ix : inersia sumbu horizontal -> lentur VERTIKAL (m4)
+        (= "Iz" pada elemen OpenSees memanjang)
+- Iy : inersia sumbu vertikal   -> lentur LATERAL (m4)
+- J  : konstanta torsi (m4)
+- cx, cy : centroid (m); tidak dipakai pipeline.
 
-Untuk pier, section fiber akan dibuat di modul terpisah (nanti).
+Sumber: project_data.BOX_SECTIONS (BELUM DIAUDIT, lihat catatan di sana).
 
-Referensi:
-- project_data.py — BOX_SECTIONS
+CATATAN AUDIT
+-------------
+1. get_J memprioritaskan BOX_SECTIONS[tipe]["J"] di atas J_VALUES.
+    Nilai keduanya saat ini sama (3.8232 / 3.7533 / 3.1667), sehingga
+    J_VALUES hanya menjadi fallback bila BOX_SECTIONS tidak memuat J.
+2. get_section_by_x memakai batas inklusif x1 <= x <= x2: pada x yang
+   tepat di batas segmen, tipe segmen PERTAMA yang menang. Pipeline tidak
+   memakainya (elements.cari_tipe_di_x dipakai pada titik tengah segmen).
+
+Pier: section fiber ada di repo terpisah (bukan di sini).
 """
-
-import os
-import sys
 
 
 # ============================================================
 # 1. KONSTANTA SECTION
 # ============================================================
 
-# Nilai J (torsi) per tipe
-# tipikal & tumpuan: dari warping analysis DXF
-# hollow: estimasi proporsional (warping segfault)
+# Nilai J (torsi) hasil warping analysis per tipe (m4), dipakai hanya
+# sebagai FALLBACK bila BOX_SECTIONS[tipe] tidak memuat "J" (lihat get_J).
+# CATATAN: BOX_SECTIONS saat ini memuat J = 4.0/3.8/4.0, sehingga nilai
+# di bawah tidak terpakai. Perbedaan itu belum diselesaikan (audit).
 J_VALUES = {
     "solid":   3.8232,    # warping analysis
-    "hollow":  3.7537,    # warping analysis (void drum)
-    "tumpuan": 3.1660,    # warping analysis (cek: lebih kecil dari hollow)
+    "hollow":  3.7533,    # warping analysis (void drum)
+    "tumpuan": 3.1667,    # warping analysis; lebih kecil dari hollow,
+                          # perlu dicek kewajarannya
 }
 
 SECTION_TYPES = ["solid", "hollow", "tumpuan"]
@@ -70,6 +82,7 @@ def get_J(tipe, box_sections):
     # Tanpa estimasi diam-diam: J harus dari analisis penampang
     raise ValueError("J untuk tipe '{}' belum ada (BOX_SECTIONS/J_VALUES)."
                      .format(tipe))
+
 
 
 def get_section(tipe, box_sections):
@@ -165,9 +178,9 @@ def print_section_info(box_sections):
     print("-" * 75)
     print()
     print("Catatan:")
-    print("  - Ix = inersia sumbu horizontal (lentur vertikal, ~1.45 m4)")
-    print("  - Iy = inersia sumbu vertikal (lentur lateral, ~33 m4)")
-    print("  - J  = konstanta torsi (dari warping analysis / estimasi)")
+    print("  - Ix = inersia sumbu horizontal (lentur vertikal)")
+    print("  - Iy = inersia sumbu vertikal (lentur lateral)")
+    print("  - J  = konstanta torsi (dari BOX_SECTIONS; belum diaudit)")
 
     print()
 
@@ -215,8 +228,7 @@ def print_section_per_segmen(section_map, box_sections):
 # ============================================================
 
 if __name__ == "__main__":
-    # Path relatif dari lokasi file
-    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # Jalankan dari root repo:  python -m core.sections
     from project import project_data as pdata
     
     # Print info

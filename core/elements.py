@@ -9,32 +9,56 @@ Elemen (elasticBeamColumn, deck elastis):
 - Melintang (arah z): satu elemen per segmen z per stasiun.
 Jumlah elemen mengikuti data node (lihat hasil buat_semua_elemen()).
 
-Perubahan utama dibanding versi sebelumnya:
-- Tiap garis memanjang memakai properti STRIP-nya (section_strips),
-  bukan properti seluruh penampang. Jumlah properti semua garis = total
-  BOX_SECTIONS (A, Ix, J).
-- Elemen melintang memakai properti jalur selebar dx (profil kedalaman
-  d(z) dari DXF), bukan properti penampang penuh.
-- Tipe section dicari dari titik tengah segmen (tidak perlu persis sama
-  dengan SECTION_MAP).
-- E, G diimpor dari materials.py.
-- z_ref (batas tributary) dan z_garis (posisi fisik node) dipisah.
-  Iy tiap garis dihitung terhadap posisi node, sehingga
-  sum(Iy_i + A_i*z_node^2) = Iy total.
-- Elemen melintang memakai tipe section di stasiun dan koordinat node
-  (sebelumnya z_garis terbaca sebagai argumen `tipe`).
+STATUS: [AKTIF] setelah nodes.py, sebelum boundary_condition.py.
 
-Sumbu lokal:
-- Memanjang : vecxz = (0,0,1) -> y lokal = y global (vertikal);
-  lentur vertikal memakai Iz  (Iz <- Ix strip), lateral memakai Iy.
-- Melintang : vecxz = (1,0,0) -> z lokal = x global; lentur vertikal
-  memakai Iz (= dx*d_eq^3/12).
+Properti elemen
+---------------
+- Memanjang: tiap garis memakai properti STRIP-nya
+  (section_strips.properti_garis), bukan properti seluruh penampang.
+  Jumlah properti semua garis = total BOX_SECTIONS:
+  sum(A_i) = A, sum(Ix_i) = Ix, sum(Iy_i + A_i*z_node^2) = Iy, sum(J_i) = J.
+- Melintang: properti jalur selebar dx (profil kedalaman d(z) dari
+  geometri parametrik section_strips), dx = lebar tributari stasiun
+  (lebar_tributari). Bukan properti penampang penuh.
+- Tipe section memanjang dicari dari TITIK TENGAH segmen
+  (cari_tipe_di_x); tipe melintang dari x stasiun. Karena batas inklusif,
+  stasiun yang tepat di batas dua tipe memakai tipe segmen PERTAMA pada
+  SECTION_MAP.
+- E, G dari project.materials (E_BOX, G_BOX). Satu material untuk semua.
+- z_ref (batas tributari strip) dan z_garis (posisi fisik node) dipisah;
+  Iy tiap garis dihitung terhadap posisi node.
 
-Tag geomTransf: 1 = deck memanjang, 2 = deck melintang, 3 = pier.
+Konvensi sumbu dan penamaan inersia (PENTING saat audit)
+--------------------------------------------------------
+Urutan argumen elasticBeamColumn: A, E, G, J, Iy, Iz.
+- Memanjang : vecxz = (0,0,1) -> sumbu lokal y = y global (vertikal).
+    BOX_SECTIONS/strip "Ix" (lentur vertikal) -> Iz  OpenSees
+    BOX_SECTIONS/strip "Iy" (lentur lateral)  -> Iy  OpenSees
+  Dalam dict elemen_list kunci "Ix" tetap berarti Ix strip (bukan Iz).
+- Melintang : vecxz = (1,0,0) -> sumbu lokal z = x global.
+    properti_melintang["Iz"] = dx * d_eq^3 / 12 (lentur vertikal) -> Iz
+    properti_melintang["Iy"] = d_rata * dx^3 / 12                 -> Iy
+
+Tag
+---
+Elemen memanjang 1.. (urut garis j, lalu stasiun i); melintang 1001..
+(urut stasiun, lalu j). Batas 1000 elemen memanjang TIDAK divalidasi.
+geomTransf: 1 = deck memanjang, 2 = deck melintang, 3 = pier
+[PLACEHOLDER: TRANSF_PIER tidak didefinisikan/dipakai di repo ini].
+
+CATATAN AUDIT
+-------------
+1. Elemen melintang menerima properti dari section_strips.properti_melintang,
+   yang memakai kedalaman d(z) tipe geometri solid/hollow; untuk tipe
+   "tumpuan" geometrinya sama dengan solid (lihat catatan BOX_SECTIONS).
+2. J elemen melintang memakai pendekatan penampang persegi (b*t^3*
+   (1/3 - 0.21 r (1 - r^4/12))) yang dirata-ratakan harmonik; belum
+   diverifikasi terhadap analisis lain.
+3. Menjalankan langsung: python -m core.elements (dari root repo).
 """
 
-import os
-import sys
+import math
+
 import openseespy.opensees as ops
 
 from project.materials import E_BOX, G_BOX
@@ -49,11 +73,11 @@ except ImportError:
 # ============================================================
 
 TAG_MEMANJANG_START = 1
-TAG_MELINTANG_START = 1001
+TAG_MELINTANG_START = 1001   # elemen memanjang harus < 1001 (tidak divalidasi)
 
 TRANSF_MEMANJANG = 1   # vecxz = (0, 0, 1)
 TRANSF_MELINTANG = 2   # vecxz = (1, 0, 0)
-TRANSF_PIER = 3        # vecxz = (1, 0, 0), dipakai pier.py
+TRANSF_PIER = 3        # [PLACEHOLDER] tidak dipakai di repo ini (repo pier)
 
 
 # ============================================================
@@ -76,6 +100,24 @@ def cari_tipe_di_x(x, section_map, tol=1e-6):
         if sx1 - tol <= x <= sx2 + tol:
             return tipe
     raise ValueError("x = {} tidak ada di SECTION_MAP".format(x))
+
+
+def geometri_aksial(n1, n2):
+    """
+    Panjang sumbu dan arah elemen memanjang dari koordinat node.
+
+    Returns (L_aksial, cos_a, sin_a). Gelagar memanjang berada dalam bidang
+    x-y (z sama di kedua ujung); a = sudut kemiringan sumbu terhadap
+    horizontal. Dipakai untuk memproyeksikan beban gravitasi ke sumbu lokal
+    elemen (analysis.komponen_lokal).
+    """
+    c1, c2 = ops.nodeCoord(n1), ops.nodeCoord(n2)
+    dx, dy, dz = c2[0] - c1[0], c2[1] - c1[1], c2[2] - c1[2]
+    if abs(dz) > 1e-9:
+        raise ValueError("Elemen memanjang {}-{} tidak sejajar bidang x-y "
+                         "(dz = {}).".format(n1, n2, dz))
+    L = math.hypot(dx, dy)
+    return L, dx / L, dy / L
 
 
 def lebar_tributari(stasiun, i):
@@ -135,10 +177,12 @@ def buat_elemen_memanjang(node_result, section_map, box_sections,
                         p["A"], E, G, p["J"], p["Iy"], p["Ix"],
                         TRANSF_MEMANJANG)
 
+            L_ax, cos_a, sin_a = geometri_aksial(n1, n2)
             elemen_list.append({
                 "tag": ele_tag, "tipe_elemen": "memanjang",
                 "n1": n1, "n2": n2, "x1": s1["x"], "x2": s2["x"],
                 "z": z_garis[j], "garis": j, "unit": s1["unit"],
+                "L_aksial": L_ax, "cos_a": cos_a, "sin_a": sin_a,
                 "tipe_section": tipe,
                 "A": p["A"], "Ix": p["Ix"], "Iy": p["Iy"], "J": p["J"],
             })
@@ -286,7 +330,7 @@ def print_verifikasi_properti(result, box_sections, section_map):
 # ============================================================
 
 if __name__ == "__main__":
-    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # Jalankan dari root repo:  python -m core.elements
     from project import project_data as pdata
     from core import nodes
 
@@ -301,6 +345,38 @@ if __name__ == "__main__":
     print_elemen_sample(elemen_result, n=5)
     print_verifikasi_properti(elemen_result, pdata.BOX_SECTIONS,
                               pdata.SECTION_MAP)
+
+    # VERIFIKASI GEOMETRI 3D ELEMEN
+    print("=" * 75)
+    print("VERIFIKASI GEOMETRI ELEMEN")
+    print("=" * 75)
+
+    # Elemen memanjang: cek perubahan elevasi pada kedua ujung
+    for e in elemen_result["memanjang"][:5]:
+        c1 = ops.nodeCoord(e["n1"])
+        c2 = ops.nodeCoord(e["n2"])
+        print(
+            "Memanjang tag={}: dx={:.3f}, dy={:.4f}, dz={:.3f}".format(
+                e["tag"],
+                c2[0] - c1[0],
+                c2[1] - c1[1],
+                c2[2] - c1[2],
+            )
+        )
+
+    # Elemen melintang: cek elevasi kedua ujung
+    for e in elemen_result["melintang"][:5]:
+        c1 = ops.nodeCoord(e["n1"])
+        c2 = ops.nodeCoord(e["n2"])
+        print(
+            "Melintang tag={}: dy={:.6f}, dz={:.3f}".format(
+                e["tag"],
+                c2[1] - c1[1],
+                c2[2] - c1[2],
+            )
+        )
+
+    print()
 
     ele_tags = ops.getEleTags()
     print("  Total elemen di OpenSees: {}".format(len(ele_tags)))

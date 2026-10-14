@@ -17,22 +17,26 @@ Grillage:
 
 Catatan:
     Ini sanity check framework, bukan acceptance criterion desain.
+
+Cakupan dan batasan (CATATAN AUDIT)
+-----------------------------------
+1. Hanya tipe SECTION_TYPE = "solid", satu bentang sederhana L = 20 m,
+   beban merata seluruh lebar. Tipe hollow/tumpuan, EJ, menerus, dan beban
+   tidak simetris TIDAK diuji.
+2. Bandingkan lendutan RATA-RATA 5 garis tengah bentang dengan
+   5 w L^4 / (384 E Ix_total). Kriteria PASS <= 5%, WARNING <= 10%.
+3. Elemen melintang memakai dx = lebar tributari arah x per stasiun
+   (setengah di ujung, sama dengan elements.lebar_tributari). dx BUKAN
+   jarak antar z.
+4. E, G diimpor dari project.materials (E_BOX, G_BOX), sama dengan model.
+   Rasio terhadap equivalent beam tidak bergantung pada nilai E.
+5. Menjalankan: python -m pytest tests   atau   python -m tests.test_grillage_equivalent_beam
+   dari root repo (butuh openseespy).
+6. Tes ini membangun grillage sendiri (bukan lewat core.elements), jadi
+   perubahan di elements.py tidak otomatis tercermin di sini.
 """
 
-import sys
-import os
-import math
-
 import openseespy.opensees as ops
-
-
-# ============================================================
-# PATH PROJECT
-# ============================================================
-
-TEST_DIR = os.path.dirname(os.path.abspath(__file__))
-BASE_DIR = os.path.dirname(TEST_DIR)
-
 
 
 # ============================================================
@@ -40,6 +44,7 @@ BASE_DIR = os.path.dirname(TEST_DIR)
 # ============================================================
 
 from project import project_data as pdata
+from project.materials import E_BOX, G_BOX
 from core import nodes
 
 from core import section_strips
@@ -49,9 +54,8 @@ from core import section_strips
 # PARAMETER TEST
 # ============================================================
 
-E = 35.0e6          # kN/m2
-NU = 0.20
-G = E / (2.0 * (1.0 + NU))
+E = E_BOX           # kN/m2 (sama dengan model, project/materials.py)
+G = G_BOX
 
 L = 20.0             # m
 W_TOTAL = 1000.0     # kN total UDL sepanjang bentang
@@ -280,23 +284,26 @@ def build_grillage():
     #
     # properti_melintang(dx, tipe, z_garis)
     #
+    # dx      = lebar tributari arah x stasiun (m)
     # z_garis = posisi fisik node.
     # --------------------------------------------------------
 
+    # dx = lebar tributari arah x tiap stasiun (setengah di ujung),
+    # sama dengan elements.lebar_tributari(). Bukan jarak antar z.
+    dx_stasiun = tributary_x_weights(N_STATION, L)
+
     for i in range(N_STATION):
+
+        props_trans = section_strips.properti_melintang(
+            dx_stasiun[i],
+            SECTION_TYPE,
+            Z_NODE,
+        )
 
         for j in range(N_LINE - 1):
 
             n1 = node[(i, j)]
             n2 = node[(i, j + 1)]
-
-            dx = Z_NODE[j + 1] - Z_NODE[j]
-
-            props_trans = section_strips.properti_melintang(
-                dx,
-                SECTION_TYPE,
-                Z_NODE,
-            )
 
             # Ambil property untuk segmen transverse j.
             #
@@ -687,6 +694,11 @@ def main():
     print("=" * 75)
 
     ops.wipe()
+
+
+def test_grillage_vs_equivalent_beam():
+    """Entri pytest: gagal (AssertionError) bila error relatif > 10%."""
+    main()
 
 
 if __name__ == "__main__":

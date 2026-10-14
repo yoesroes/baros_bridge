@@ -3,49 +3,89 @@
 Modul Boundary Condition untuk Jembatan Baros (Grillage 3D).
 Satuan: m.
 
-BC (fixity = ux, uy, uz, rx, ry, rz):
-- Tetap arah x ("pin")  : (1,1,1,0,0,0)
-- Roller                : (0,1,1,0,0,0)
+BC dibuat PER BEARING sesuai TABLE BEARING (project_data.BEARINGS), bukan
+lagi di semua garis memanjang.
 
-Gelagar terputus di EJ (P2, P7) menjadi 3 unit. Tiap unit WAJIB punya
-tepat satu support tetap arah x, kalau tidak unit itu bebas bergerak
-dalam x (matriks kekakuan singular). Pilihan default di TETAP_X_PER_UNIT:
-    unit 0 (A1-P2)  : A1   (sama seperti sebelumnya)
-    unit 1 (P2-P7)  : P4   <- ASUMSI, sesuaikan dengan gambar bearing
-    unit 2 (P7-A2)  : P8   <- ASUMSI, sesuaikan dengan gambar bearing
-Pada support EJ (P2, P7) ada dua garis bearing (satu per unit), keduanya
-dibuat roller kecuali dipilih tetap.
+Cara kerja
+----------
+Untuk tiap bearing (B1..B24):
+  1. Node bearing dibuat di (x tumpuan, y = elevasi_model(x), z bearing),
+      dengan y relatif terhadap elevasi A1. z = -/+ jarak/2 (ganjil = kiri
+      dilihat dari A1, lihat project_data.BEARING_KIRI_Z).
+  2. Node bearing dihubungkan ke node garis memanjang TERDEKAT pada stasiun
+     tumpuan itu lewat lengan kaku melintang (elasticBeamColumn sangat
+     kaku). Jadi dua bearing menahan translasi vertikal DAN rotasi terhadap
+     sumbu x (puntir) node garis tersebut, dan gaya dari garis lain mengalir
+     lewat elemen melintang (diafragma tumpuan).
+  3. Node bearing di-fix menurut tipenya:
+        MD   (0,1,0,0,0,0)   OD-L (0,1,1,0,0,0)
+        OD-T (1,1,0,0,0,0)   FIX  (1,1,1,0,0,0)
+     (ux memanjang, uy vertikal, uz melintang).
+Reaksi tiap bearing = reaksi node bearing (ops.nodeReaction).
 
-Setiap garis support punya satu node per garis memanjang.
+bc_list tetap berisi satu entri per node yang di-fix, dengan kunci lama
+(support, x, z, node, fixity, unit, tipe) ditambah "bearing" (id) dan
+"node_garis" (node garis tempat lengan terhubung). "tipe" kini berisi tipe
+bearing.
+
+Validasi: tiap unit harus punya tepat SATU garis tumpuan yang menahan arah
+x (FIX atau OD-T), dan minimal satu bearing yang menahan uz.
+
+CATATAN AUDIT
+-------------
+1. Jarak bearing (1.52 m abutment, 0.94 m pier head) dan sisi ganjil/genap
+   berasal dari gambar; orientasi +z = kanan adalah ASUMSI
+   (BEARING_KIRI_Z).
+2. Lengan kaku: A = I = J = LENGAN_KAKU (m2 / m4). Terlalu besar
+   memperburuk kondisi matriks, terlalu kecil membuat lengan fleksibel.
+3. Garis lampiran = garis memanjang terdekat ke z bearing. Pada skema garis
+   berbeda, node terdekat bisa berbeda (mis. abutment, z = +/-0.76 m: garis
+   z = 0 pada 5 garis, tetapi garis z = +/-1.46 pada 7 garis).
+4. Pier head dan pondasi tidak dimodelkan (repo terpisah).
 
 Referensi:
-- core/nodes.py
-- project_data.SUPPORTS
+- core/nodes.py, core/elements.py
+- project_data.SUPPORTS, project_data.BEARINGS
 """
 
-import os
-import sys
 import openseespy.opensees as ops
+
+from project.materials import E_BOX, G_BOX
+from core import elements
+from core.nodes import elevasi_model
 
 
 # ============================================================
 # 1. KONSTANTA
 # ============================================================
 
-FIX_PIN = (1, 1, 1, 0, 0, 0)
-FIX_ROLLER = (0, 1, 1, 0, 0, 0)
+FIXITY_TIPE = {
+    "MD":   (0, 1, 0, 0, 0, 0),
+    "OD-L": (0, 1, 1, 0, 0, 0),
+    "OD-T": (1, 1, 0, 0, 0, 0),
+    "FIX":  (1, 1, 1, 0, 0, 0),
+}
 
-# unit -> nama support yang tetap arah x
-TETAP_X_PER_UNIT = {0: "A1", 1: "P4", 2: "P8"}
+TAG_NODE_BEARING = 900001      # node bearing
+TAG_ELE_LENGAN = 900001        # elemen lengan kaku (ruang tag elemen sendiri)
+LENGAN_KAKU = 100.0            # A = J = Iy = Iz lengan (m2 / m4)
 
 
 # ============================================================
 # 2. FUNGSI BC
 # ============================================================
 
-def terapkan_bc(node_result, supports, tetap_x=None):
+def _z_bearing(id_bearing, jarak, kiri_z):
+    """Ganjil = kiri (dilihat dari A1), genap = kanan."""
+    nomor = int(id_bearing.lstrip("Bb"))
+    arah = kiri_z if nomor % 2 == 1 else -kiri_z
+    return arah * jarak / 2.0
+
+
+def terapkan_bc(node_result, supports, bearings=None, jarak=None,
+                kiri_z=None):
     """
-    Terapkan BC di semua support.
+    Terapkan BC per bearing.
 
     Parameters
     ----------
@@ -53,14 +93,19 @@ def terapkan_bc(node_result, supports, tetap_x=None):
         Hasil nodes.buat_semua_node()
     supports : dict
         project_data.SUPPORTS
-    tetap_x : dict, optional
-        {unit: nama_support} yang tetap arah x. Default TETAP_X_PER_UNIT.
+    bearings, jarak, kiri_z : optional
+        Default dari project_data (BEARINGS, BEARING_JARAK,
+        BEARING_KIRI_Z).
 
     Returns
     -------
     bc_list : list of dict
     """
-    tetap_x = TETAP_X_PER_UNIT if tetap_x is None else tetap_x
+    if bearings is None or jarak is None or kiri_z is None:
+        from project import project_data as pdata
+        bearings = pdata.BEARINGS if bearings is None else bearings
+        jarak = pdata.BEARING_JARAK if jarak is None else jarak
+        kiri_z = pdata.BEARING_KIRI_Z if kiri_z is None else kiri_z
 
     node_map = node_result["node_map"]
     x_index = node_result["x_index"]
@@ -68,46 +113,73 @@ def terapkan_bc(node_result, supports, tetap_x=None):
     z_garis = node_result["z_garis"]
     n_unit = node_result["n_unit"]
 
-    # validasi: tiap unit tepat satu support tetap
-    for u in range(n_unit):
-        if u not in tetap_x:
-            raise ValueError("Unit {} belum punya support tetap arah x."
-                             .format(u))
     nama_ada = set(supports.keys())
-    for u, nama in tetap_x.items():
-        if nama not in nama_ada:
-            raise ValueError("Support tetap '{}' (unit {}) tidak ada di "
-                             "SUPPORTS.".format(nama, u))
+    for b in bearings:
+        if b[1] not in nama_ada:
+            raise ValueError("Bearing {}: support '{}' tidak ada di "
+                             "SUPPORTS.".format(b[0], b[1]))
+        if b[3] not in FIXITY_TIPE:
+            raise ValueError("Bearing {}: tipe '{}' tidak dikenal."
+                             .format(b[0], b[3]))
 
     bc_list = []
-    terpasang = {u: 0 for u in range(n_unit)}
+    tahan_x = {u: set() for u in range(n_unit)}   # unit -> {support}
+    tahan_z = {u: 0 for u in range(n_unit)}
+    n_b = 0
 
     for nama, data in supports.items():
         x_sup = round(data["x"], 6)
         if x_sup not in x_index:
             print("WARNING: x = {} ({}) tidak ada di node".format(x_sup, nama))
             continue
+        tipe_sup = data.get("type", "pier")
+        jr = jarak["abutment" if tipe_sup == "abutment" else "pier"]
 
         for i in x_index[x_sup]:                 # 1 stasiun, 2 bila EJ
-            unit = stasiun[i]["unit"]
-            tetap = (tetap_x.get(unit) == nama)
-            fixity = FIX_PIN if tetap else FIX_ROLLER
-            if tetap:
-                terpasang[unit] += 1
+            st = stasiun[i]
+            unit, sisi = st["unit"], st["sisi"]
+            daftar = [b for b in bearings if b[1] == nama and b[2] == sisi]
+            if not daftar:
+                raise ValueError("Support {} (sisi {}) tidak punya bearing "
+                                 "di BEARINGS.".format(nama, sisi))
 
-            for j in range(len(z_garis)):
-                tag = node_map[(i, j)]
-                ops.fix(tag, *fixity)
+            for id_b, _, _, tipe in daftar:
+                zb = _z_bearing(id_b, jr, kiri_z)
+                j = min(range(len(z_garis)),
+                        key=lambda k: abs(z_garis[k] - zb))
+                n_garis = node_map[(i, j)]
+
+                n_node = TAG_NODE_BEARING + n_b
+                n_ele = TAG_ELE_LENGAN + n_b
+                n_b += 1
+                ops.node(n_node, x_sup, elevasi_model(x_sup), zb)
+                ops.element('elasticBeamColumn', n_ele, n_garis, n_node,
+                            LENGAN_KAKU, E_BOX, G_BOX, LENGAN_KAKU,
+                            LENGAN_KAKU, LENGAN_KAKU,
+                            elements.TRANSF_MELINTANG)
+
+                fixity = FIXITY_TIPE[tipe]
+                ops.fix(n_node, *fixity)
+                if fixity[0]:
+                    tahan_x[unit].add((nama, sisi))
+                if fixity[2]:
+                    tahan_z[unit] += 1
+
                 bc_list.append({
-                    "support": nama, "x": x_sup, "z": z_garis[j],
-                    "node": tag, "fixity": fixity, "unit": unit,
-                    "tipe": "pin" if tetap else "roller",
+                    "support": nama, "x": x_sup, "z": zb,
+                    "node": n_node, "node_garis": n_garis,
+                    "z_garis": z_garis[j], "bearing": id_b,
+                    "fixity": fixity, "unit": unit, "tipe": tipe,
                 })
 
-    for u, n in terpasang.items():
-        if n != 1:
-            raise ValueError("Unit {}: support tetap terpasang {} kali "
-                             "(harus 1).".format(u, n))
+    for u in range(n_unit):
+        if len(tahan_x[u]) != 1:
+            raise ValueError(
+                "Unit {}: garis tumpuan penahan arah x = {} (harus tepat "
+                "1).".format(u, sorted(tahan_x[u])))
+        if tahan_z[u] == 0:
+            raise ValueError("Unit {}: tidak ada bearing penahan uz."
+                             .format(u))
 
     return bc_list
 
@@ -119,9 +191,9 @@ def terapkan_bc(node_result, supports, tetap_x=None):
 def print_bc_info(bc_list):
     """Cetak info BC."""
     print("=" * 75)
-    print("INFO BOUNDARY CONDITION")
+    print("INFO BOUNDARY CONDITION (PER BEARING)")
     print("=" * 75)
-    print("  Total node di-fix : {}".format(len(bc_list)))
+    print("  Total node bearing di-fix : {}".format(len(bc_list)))
     print()
 
     hitung = {}
@@ -129,26 +201,30 @@ def print_bc_info(bc_list):
         k = (bc["support"], bc["unit"])
         hitung[k] = hitung.get(k, 0) + 1
 
-    print("  Node per support (unit):")
+    print("  Bearing per support (unit):")
     for (s, u), c in hitung.items():
-        print("    {} (unit {}) : {} node".format(s, u, c))
+        print("    {} (unit {}) : {} bearing".format(s, u, c))
     print()
-
 
 def print_bc_sample(bc_list, n=15):
-    """Cetak sample BC."""
-    print("=" * 75)
+    """Cetak sample BC beserta koordinat node bearing."""
+    print("=" * 100)
     print("SAMPLE BC ({} pertama)".format(n))
-    print("=" * 75)
-    print("{:>6s} {:>6s} {:>5s} {:>7s} {:>8s} {:>8s} {:>16s}".format(
-        "Node", "Sup", "Unit", "Tipe", "x (m)", "z (m)", "Fixity"))
-    print("-" * 75)
-    for bc in bc_list[:n]:
-        print("{:>6d} {:>6s} {:>5d} {:>7s} {:>8.3f} {:>8.2f} {:>16s}".format(
-            bc["node"], bc["support"], bc["unit"], bc["tipe"],
-            bc["x"], bc["z"], str(bc["fixity"])))
-    print()
+    print("=" * 100)
+    print("{:>7s} {:>5s} {:>5s} {:>6s} {:>9s} "
+          "{:>9s} {:>9s} {:>8s} {:>16s}".format(
+              "Node", "ID", "Sup", "Unit", "Tipe",
+              "y (m)", "z (m)", "z garis", "Fixity"))
+    print("-" * 100)
 
+    for bc in bc_list[:n]:
+        coord = ops.nodeCoord(bc["node"])
+        print("{:>7d} {:>5s} {:>5s} {:>6d} {:>9s} "
+              "{:>9.4f} {:>9.3f} {:>8.3f} {:>16s}".format(
+                  bc["node"], bc["bearing"], bc["support"],
+                  bc["unit"], bc["tipe"], coord[1], coord[2],
+                  bc["z_garis"], str(bc["fixity"])))
+    print()
 
 def print_bc_per_support(bc_list):
     """Cetak BC per support (dan unit)."""
@@ -162,8 +238,10 @@ def print_bc_per_support(bc_list):
 
     for (s, u) in sorted(grup.keys(), key=lambda k: (grup[k][0]["x"], k[1])):
         bcs = grup[(s, u)]
-        print("  {} unit {} (x = {:.4f} m): {}  nodes={}".format(
-            s, u, bcs[0]["x"], bcs[0]["tipe"], [b["node"] for b in bcs]))
+        print("  {} unit {} (x = {:.4f} m): {}".format(
+            s, u, bcs[0]["x"],
+            "  ".join("{}={}@z{:+.2f}".format(b["bearing"], b["tipe"], b["z"])
+                      for b in bcs)))
     print()
 
 
@@ -172,22 +250,19 @@ def print_bc_per_support(bc_list):
 # ============================================================
 
 if __name__ == "__main__":
-    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # Jalankan dari root repo:  python -m core.boundary_condition
     from project import project_data as pdata
-    
-    import nodes
+    from core import nodes
 
     ops.wipe()
     ops.model('basic', '-ndm', 3, '-ndf', 6)
 
     node_result = nodes.buat_semua_node(pdata.SECTION_MAP, pdata.SUPPORTS)
+    elements.define_geom_transf()
     bc_list = terapkan_bc(node_result, pdata.SUPPORTS)
 
     print_bc_info(bc_list)
-    print_bc_sample(bc_list, n=15)
+    print_bc_sample(bc_list, n=24)
     print_bc_per_support(bc_list)
 
-    fixed_nodes = ops.getFixedNodes()
-    print("  Total node di-fix di OpenSees: {}".format(len(fixed_nodes)))
-    print()
     print("SELESAI")

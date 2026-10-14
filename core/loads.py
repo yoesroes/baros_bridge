@@ -1,23 +1,50 @@
 # core/loads.py
 """
-Modul Beban untuk Jembatan Baros (Grillage 2D).
+Modul Beban untuk Jembatan Baros (Grillage 3D, 5 garis memanjang).
 Satuan: kN, m, kPa.
+
+STATUS: [AKTIF] fungsi-fungsi beban dipakai analysis.py. Fungsi
+hitung_beban_per_elemen / cek_distribusi / print_* / save_* adalah alat
+laporan mandiri (beban per segmen); analysis.py menyusun kasus beban
+sendiri langsung dari fungsi dasar di modul ini.
 
 Beban per elemen memanjang:
 - Berat sendiri box girder (bervariasi per section)
 - Beban mati non-struktur (aspal + air + barrier)
 - Beban hidup lajur "D" (BTR + KEL) sesuai SNI 1725:2016 Pasal 8.3
 
-Perubahan utama dibanding versi sebelumnya:
+Ketentuan yang dimodelkan:
 - BTR memakai lebar ekuivalen (5.5 m x 100% + sisa x 50%) dan faktor
   reduksi q untuk L > 30 m.
-- KEL diperlakukan sebagai BEBAN TERPUSAT (kN), bukan beban merata (kN/m),
-  dengan FBD yang bergantung pada panjang bentang ekuivalen.
-- Semua beban dapat dibagi ke garis memanjang grillage (z_garis) lewat
-  lebar tributari, sehingga total beban terjaga (tidak terhitung 5x).
+- KEL adalah BEBAN TERPUSAT (kN), bukan beban merata (kN/m), dengan FBD
+  yang bergantung pada panjang bentang ekuivalen L_E.
+- Semua beban dibagi ke garis memanjang grillage (z_garis) lewat lebar
+  tributari, sehingga total beban terjaga (tidak terhitung 5x).
 - Elemen melintang TIDAK dibebani.
-- `ele_tag` diganti `seg_id` (nomor segmen); tag elemen OpenSees sebaiknya
-  dibuat di elements.py dari pasangan (garis, seg_id).
+- `seg_id` = nomor segmen SECTION_MAP (urut dari 1). Ini BUKAN tag elemen
+  OpenSees; pemetaan ke elemen dilakukan analysis.py lewat x1/x2 dan garis.
+
+Kasus beban dan kombinasi
+-------------------------
+D1 = berat sendiri box, D2 = beban mati tambahan (aspal, air, barrier),
+L = BTR + KEL, P = prategang (selalu 0, belum dimodelkan), EQ = gempa
+(tidak ada nilai beban). Faktor kombinasi ada di KOMBINASI.
+
+CATATAN AUDIT
+-------------
+1. Z_GARIS default diambil dari pdata.Z_GARIS_REF. Posisi node fisik tetap
+   dihitung sebagai centroid strip oleh nodes.py; jangan menyamakan keduanya.
+2. Barrier diletakkan di garis terluar (posisi node), bukan di tepi deck.
+3. f_berat default = proporsional lebar tributari; untuk Baros seharusnya
+   section_strips.fraksi_berat(tipe) (berat sebanding luas strip).
+   analysis.py sudah memakai fraksi luas; __main__ di sini juga.
+4. KOMBINASI: Strength III/IV/V memiliki faktor numerik IDENTIK (angin EWs,
+   EWL tidak dimodelkan) dan Extreme Event I/II identik. Kolom
+   "description" menyebut komponen yang belum ada nilainya. [PLACEHOLDER]
+5. Faktor beban mati MINIMUM (kasus D mengurangi efek L) tidak ada.
+6. Konstanta f'c/gamma beton disalin dari project/materials.py (harus sama).
+7. ROAD_WIDTH dan DECK_WIDTH diambil dari project/project_data.py.
+8. Menjalankan langsung: python -m core.loads (dari root repo).
 
 Referensi:
 - SNI 1725:2016 - Pembebanan untuk Jembatan
@@ -25,8 +52,9 @@ Referensi:
 
 import math
 import os
-import sys
 from contextlib import redirect_stdout
+
+from project import project_data as pdata
 
 # ============================================================
 # 1. KONSTANTA BEBAN
@@ -46,8 +74,8 @@ GAMMA_AIR = 10.0        # kN/m3
 T_ASPAL = 0.075         # m
 T_AIR = 0.005           # m (0.5 cm genangan)
 A_BARRIER = 0.25        # m2 per barrier
-B_JALAN = 9.0           # m (lebar lajur kendaraan)
-B_DECK = 10.0           # m (lebar total deck)
+B_JALAN = pdata.ROAD_WIDTH  # m; sumber tunggal project_data.py
+B_DECK = pdata.DECK_WIDTH   # m; sumber tunggal project_data.py
 N_SISI = 2              # jumlah sisi barrier
 
 # Beban hidup (SNI 1725:2016 Pasal 8.3)
@@ -57,8 +85,10 @@ FBD = 0.4               # default FBD untuk L_E <= 50 m
 LEBAR_LAJUR_PENUH = 5.5 # m, lebar yang dibebani 100%
 L_BTR_BATAS = 30.0      # m, batas reduksi BTR
 
-# Posisi garis memanjang grillage (koordinat z, m)
-Z_GARIS = (-5.0, -3.5, 0.0, 3.5, 5.0)
+# Posisi garis memanjang grillage (koordinat z, m) - HANYA DEFAULT argumen
+# fungsi di bawah. Posisi model sebenarnya = nodes.Z_GARIS (lihat CATATAN
+# AUDIT 1); selalu berikan z_garis eksplisit dari node_result.
+Z_GARIS = pdata.Z_GARIS_REF  # default referensi batas strip; node fisik dihitung di nodes.py
 
 
 # ============================================================
@@ -153,12 +183,13 @@ def hitung_P_kel(L_E=None, B=B_JALAN):
 
 def hitung_P_kel_per_lebar(L_E=None):
     """
-    Intensitas KEL terhadap lebar transversal.
+    Intensitas KEL terhadap lebar transversal (sudah dengan FBD).
 
-    Satuan:
-        kN/m lebar transversal
+    Satuan: kN per m lebar transversal; kalikan lebar efektif (m) untuk
+    mendapat gaya terpusat (kN).
     """
     return P_KEL * (1.0 + hitung_fbd(L_E))
+
 
 def hitung_w_hidup(L=None):
     """
@@ -181,18 +212,23 @@ def _overlap(a1, a2, b1, b2):
     """Panjang irisan interval [a1,a2] dan [b1,b2]."""
     return max(0.0, min(a2, b2) - max(a1, b1))
 
-
-def batas_tributari(z_garis=Z_GARIS):
+def batas_tributari(z_garis=Z_GARIS, B=B_DECK):
     """
-    Batas tributari tiap garis: dari tengah-tengah ke garis tetangga.
-    Garis terluar dibatasi sampai posisinya sendiri.
+    Batas tributari tiap garis sampai tepi fisik dek.
+    Batas antar-garis berada di titik tengah dua garis berurutan.
+    Batas luar mengikuti lebar dek B yang berpusat di z = 0.
     Return: list of (z_awal, z_akhir).
     """
     z = list(z_garis)
     if len(z) < 2 or z != sorted(z):
         raise ValueError("z_garis harus >= 2 titik dan terurut naik.")
+
+    z_min, z_max = -B / 2.0, B / 2.0
+    if z[0] < z_min - 1e-9 or z[-1] > z_max + 1e-9:
+        raise ValueError("Garis grillage berada di luar tepi dek.")
+
     mid = [(z[i] + z[i + 1]) / 2.0 for i in range(len(z) - 1)]
-    batas = [z[0]] + mid + [z[-1]]
+    batas = [z_min] + mid + [z_max]
     return list(zip(batas[:-1], batas[1:]))
 
 
@@ -214,8 +250,8 @@ def lebar_jalan_per_garis(z_garis=Z_GARIS, B=B_JALAN):
 
 def distribusi_barrier(z_garis=Z_GARIS):
     """
-    Beban barrier (kN/m) per garis: satu barrier di tiap garis terluar
-    (asumsi barrier berada di tepi deck).
+    Beban barrier (kN/m) per garis: satu barrier dibebankan pada tiap garis
+    grillage terluar.
     """
     w_satu = GAMMA_BETON_BARRIER * A_BARRIER
     hasil = [0.0] * len(z_garis)
@@ -360,6 +396,9 @@ def cek_distribusi(elemen_data, tol=1e-6):
 # 5. KOMBINASI PEMBEBANAN (SNI 1725:2016)
 # ============================================================
 
+# Faktor beban per kombinasi. Kunci "description" hanyalah teks; kode hanya
+# membaca D1, D2, L, P, EQ. Komponen yang disebut di "description" tetapi
+# tidak punya faktor/nilai (EWs, EWL) BELUM dimodelkan [PLACEHOLDER].
 KOMBINASI = {
     # ========================================================
     # SERVICE
@@ -394,7 +433,7 @@ KOMBINASI = {
     },
     "Strength III": {
         "D1": 1.2, "D2": 2.0, "L": 0.0, "P": 1.0,
-        "description": "1.2D1 + 2.0D2 + P + EWs",
+        "description": "1.2D1 + 2.0D2 + P + EWs  (EWs belum dimodelkan)",
     },
     "Strength IV": {
         "D1": 1.2, "D2": 2.0, "L": 0.0, "P": 1.0,
@@ -402,19 +441,22 @@ KOMBINASI = {
     },
     "Strength V": {
         "D1": 1.2, "D2": 2.0, "L": 0.0, "P": 1.0,
-        "description": "1.2D1 + 2.0D2 + P + EWs + EWL",
+        "description": "1.2D1 + 2.0D2 + P + EWs + EWL  (EWs, EWL belum dimodelkan)",
     },
 
     # ========================================================
     # EXTREME EVENT
     # ========================================================
+    # Extreme Event I dan II saat ini identik. Beban gempa EQ tidak ada
+    # nilainya (w_gempa = 0 di hitung_w_kombinasi); kombinasi ini tidak
+    # dikeluarkan di output (output.py membuang nama berisi "Extreme").
     "Extreme Event I": {
         "D1": 1.0, "D2": 1.0, "L": 0.3, "P": 1.0, "EQ": 1.0,
-        "description": "D1 + D2 + 0.3L + P + EQ",
+        "description": "D1 + D2 + 0.3L + P + EQ  (EQ belum ada nilainya)",
     },
     "Extreme Event II": {
         "D1": 1.0, "D2": 1.0, "L": 0.3, "P": 1.0, "EQ": 1.0,
-        "description": "D1 + D2 + 0.3L + P + EQ",
+        "description": "D1 + D2 + 0.3L + P + EQ  (EQ belum ada nilainya)",
     },
 }
 
@@ -732,16 +774,25 @@ if __name__ == "__main__":
     BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     from project import project_data as pdata
 
-    # Bentang (m) dari README; ganti dengan pdata.SPANS bila formatnya list panjang
-    BENTANG = [16.2472, 17.5, 17.5, 23.5, 38.0, 17.5, 25.0, 25.0, 24.2472]
+    # Bentang = jarak antar support berurutan (sama dengan
+    # analysis.daftar_bentang), bukan angka yang ditulis tangan.
+    x_sup = sorted(d["x"] for d in pdata.SUPPORTS.values())
+    BENTANG = [b - a for a, b in zip(x_sup[:-1], x_sup[1:])]
     L_E = hitung_L_ekuivalen(BENTANG)
     L_BEBAN = None   # None -> q BTR = 9 kPa (konservatif)
+
+    # Posisi garis dan fraksi berat sama dengan model (nodes / analysis):
+    # garis = centroid strip hollow, berat sendiri = fraksi luas strip.
+    from core import section_strips as strips
+    Z_MODEL = strips.z_garis_centroid("hollow", strips.Z_GARIS_DEFAULT)
+    F_BERAT = {t: strips.fraksi_berat(t, strips.Z_GARIS_DEFAULT)
+               for t in pdata.BOX_SECTIONS}
 
     print_parameter(L_BEBAN, L_E)
 
     elemen_data = hitung_beban_per_elemen(
-        pdata.SECTION_MAP, pdata.BOX_SECTIONS,
-        L_beban=L_BEBAN, L_E=L_E)
+        pdata.SECTION_MAP, pdata.BOX_SECTIONS, z_garis=Z_MODEL,
+        L_beban=L_BEBAN, L_E=L_E, f_berat=F_BERAT)
     cek_distribusi(elemen_data)
 
     print_ringkasan(elemen_data)

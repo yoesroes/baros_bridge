@@ -1,16 +1,35 @@
-# core/materials.py
+# project/materials.py
 """
 Modul Material untuk Jembatan Baros.
 Satuan: kN, m, kPa.
 
-Material:
-- Beton deck  : elastis (Elastic)
-- Beton pier  : nonlinear (Concrete02 cover + Concrete04 core)
-- Baja tulangan: nonlinear (Steel02)
+Status per bagian
+-----------------
+[AKTIF]       Beton box (deck): E_BOX, G_BOX, FPC_BOX -> dipakai
+              core/elements.py (E, G elemen elastis). core/loads.py
+              menulis ulang f'c box untuk berat jenis (salinan sendiri).
+[PLACEHOLDER] Beton pier (Concrete02 cover + Concrete04 core), baja
+              tulangan (Steel02), pile, prategang: TIDAK dipakai analisis
+              deck repo ini. Disiapkan untuk repo pier/pondasi
+              (bersama confinement.py dan rebar_layout.py), dibiarkan apa
+              adanya. Parameter core masih default, belum dari Mander.
+
+Konvensi tanda OpenSees: tekan NEGATIF (fpc, epsc0, fpcu, epsU).
+
+CATATAN AUDIT
+-------------
+1. E = 4700*sqrt(f'c) [MPa] adalah rumus SNI 2847 / ACI 318, bukan dari
+   SNI 1725:2016. Cek rujukan yang dipakai.
+2. Nilai f'c dan gamma juga ditulis ulang di core/loads.py (FPC_BOX,
+   FPC_PIER, GAMMA_BETON_*). Dua salinan harus selalu sama. Belum ada
+   pengecekan otomatis.
+3. project_data.MATERIAL (E 30e6, f'c 35 MPa) TIDAK dipakai dan berbeda
+   dari file ini.
+4. nu = 0.2 -> G = E / (2 (1 + nu)).
 
 Referensi:
-- SNI 1725:2016
-- Mander, Priestley & Park (1988)
+- SNI 1725:2016 (berat jenis beton, pembebanan)
+- Mander, Priestley & Park (1988) (hanya untuk bagian pier)
 """
 
 import math
@@ -26,8 +45,8 @@ FPC_BOX = 41.5e3        # kPa (41.5 MPa)
 FPC_PIER = 30.0e3       # kPa (30 MPa)
 FPC_PILE = 30.0e3       # kPa (30 MPa)
 
-# Modulus elastisitas (SNI 1725:2016)
-# E = 4700 * sqrt(f'c) dalam MPa, konversi ke kPa
+# Modulus elastisitas beton
+# E = 4700 * sqrt(f'c) dalam MPa (rumus SNI 2847 / ACI 318), konversi ke kPa
 E_BOX = 4700.0 * math.sqrt(FPC_BOX / 1000.0) * 1000.0    # kPa
 E_PIER = 4700.0 * math.sqrt(FPC_PIER / 1000.0) * 1000.0  # kPa
 E_PILE = 4700.0 * math.sqrt(FPC_PILE / 1000.0) * 1000.0  # kPa
@@ -42,14 +61,16 @@ FY = 420e3              # kPa (BJTS 420B)
 E_STEEL = 200e6         # kPa (200 GPa)
 B_STEEL = 0.01          # strain hardening ratio
 
-# Prategang (nanti)
+# Prategang [PLACEHOLDER] - belum dipakai; prategang belum dimodelkan
+# (loads.KOMBINASI memakai P = 0).
 FPU = 1860e3            # kPa (ASTM A416)
 FPY = 1675e3            # kPa
 
 
 # ============================================================
-# 2. TAG MATERIAL (auto-increment)
+# 2. TAG MATERIAL (ditetapkan manual, bukan auto-increment)
 # ============================================================
+# Tag 1 dipakai deck; tag 2-4 untuk pier [PLACEHOLDER].
 
 MAT_TAGS = {
     "beton_box": 1,
@@ -93,12 +114,17 @@ def define_concrete02(tag, fpc, epsc0, fpcu, epsU, ft, Ets, rat=0.1):
         Kuat tekan residual (kPa, negatif)
     epsU : float
         Regangan ultimit (negatif)
-    rat : float
-        Ratio regangan pada tegangan residual (default 0.1)
     ft : float
-        Kuat tarik (kPa)
+        Kuat tarik (kPa, positif)
     Ets : float
         Modulus tension stiffening (kPa)
+    rat : float
+        Rasio kemiringan unload terhadap Ec, default 0.1 (argumen
+        "lambda" pada perintah OpenSees Concrete02; bukan rasio regangan).
+
+    Catatan: urutan argumen fungsi ini (fpcu, epsU, ft, Ets, rat) berbeda
+    dari urutan perintah OpenSees (fpc epsc0 fpcu epsU lambda ft Ets);
+    pemetaan dilakukan di dalam fungsi.
     """
     ops.uniaxialMaterial('Concrete02', tag,
                          fpc, epsc0, fpcu, epsU, rat, ft, Ets)
@@ -183,9 +209,9 @@ def define_all_materials():
         rat=0.1
     )
     
-    # 3. Beton pier core (Concrete04, Mander)
-    # Untuk sementara pakai parameter default
-    # Nanti bisa di-override dengan confinement.py
+    # 3. Beton pier core (Concrete04, Mander)  [PLACEHOLDER]
+    # Parameter default tak terkekang (epsU = -0.02 asumsi); akan
+    # di-override dengan hasil ManderConfinement (repo pier).
     tags["beton_pier_core"] = define_concrete04(
         MAT_TAGS["beton_pier_core"],
         fpc=-FPC_PIER,
@@ -230,7 +256,7 @@ def print_material_info():
     print("  E             = {:>8.3e} kPa".format(E_STEEL))
     print("  b             = {:>8.3f}".format(B_STEEL))
     print()
-    print("PRATEGANG (nanti):")
+    print("PRATEGANG (placeholder):")
     print("  fpu           = {:>8.1f} MPa".format(FPU / 1000))
     print("  fpy           = {:>8.1f} MPa".format(FPY / 1000))
     print()
@@ -264,14 +290,6 @@ if __name__ == "__main__":
     print("Material berhasil didefinisikan:")
     for nama, tag in tags.items():
         print("  {:>25s} : tag = {}".format(nama, tag))
-    
-    print()
-    print("Cek material dengan tag:")
-    for tag in [1, 2, 3, 4]:
-        try:
-            print("  Tag {}: OK".format(tag))
-        except:
-            print("  Tag {}: ERROR".format(tag))
     
     print()
     print("SELESAI")

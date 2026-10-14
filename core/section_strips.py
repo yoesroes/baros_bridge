@@ -5,9 +5,9 @@ Satuan: m. Sumbu: z = melintang jembatan, y = vertikal (ke atas).
 
 Mengapa modul ini ada
 ---------------------
-Penampang Baros hampir solid: badan tengah setebal ~1.5 m dengan sayap
-tipis. Total A, Ix, J untuk SELURUH lebar tidak boleh dipasang pada tiap
-garis memanjang grillage (hasilnya ~5x terlalu kaku). Modul ini memotong
+Penampang Baros terdiri dari 3 tipe solid, hollow, dan tumpuan.
+Badan tengah setebal ~1.5 m dengan sayap tipis. Properti penampag total A, Ix, J 
+harus didistribusikan kepada tiap garis memanjang grillage. Modul ini memotong
 penampang menjadi strip tributary, satu strip per garis memanjang:
 - posisi garis aktual = centroid z strip (zbar),
 - A_i                         : integral strip (jumlah = total),
@@ -27,6 +27,27 @@ Fraksi dihitung dari geometri lalu DISKALA ke total per tipe di
 project_data.BOX_SECTIONS (A, Ix, Iy, J). ringkasan() mengaudit properti
 FINAL (keluaran properti_garis), bukan besaran geometri mentah.
 
+STATUS: [AKTIF] dipakai nodes.py (z_garis_centroid) dan elements.py /
+analysis.py (properti_garis, properti_melintang, fraksi_berat).
+
+CATATAN AUDIT
+-------------
+1. Total per tipe (A, Ix, Iy, J) dibaca dari project_data.BOX_SECTIONS
+   (BELUM DIAUDIT). Geometri parametrik di modul ini berbeda dari total itu
+   (rasio geometri/total: A 1.04-1.08, Ix 1.02-1.14, Iy 1.07). Selisihnya
+   diserap penskalaan (kA, kI) dan bagian Iy lokal, sehingga properti FINAL
+   tetap memenuhi total; distribusi antar garis berasal dari geometri.
+2. Tipe "tumpuan" TIDAK punya geometri sendiri: _void_list hanya membedakan
+   "hollow"; "solid" dan "tumpuan" memakai geometri yang sama (tanpa void).
+3. Dict `contoh` di __main__ memakai total yang BERBEDA dari BOX_SECTIONS
+   (versi geometri lama, A 8.567 / Iy 35.85 untuk solid) dan hanya untuk
+   demonstrasi mandiri; jangan dipakai sebagai nilai model.
+4. Strip tributari dibentuk dari titik tengah antar z_ref (Z_GARIS_DEFAULT),
+   tidak diiterasi ulang setelah posisi node dipindah ke centroid strip.
+5. Integrasi numerik trapesium (n = 1500 per strip, 4000 total); ketelitian
+   belum dikaji (mis. tepi drum lingkaran).
+6. Menjalankan langsung: python -m core.section_strips (dari root repo).
+
 Geometri (dari DXF) - lihat konstanta di bagian 1; nilai di sana yang berlaku:
 - lebar 10.0 m, tinggi di CL 1.50 m, kemiringan permukaan 2%
 - void tipe hollow: 2 drum D 0.500 di z = +/-0.625 m (pusat 0.725 m di atas
@@ -36,37 +57,42 @@ Geometri (dari DXF) - lihat konstanta di bagian 1; nilai di sana yang berlaku:
 
 import math
 from functools import lru_cache
+from project import project_data as pdata
 
 # ============================================================
 # 1. GEOMETRI
 # ============================================================
 
-B_DECK = 10.0
+B_DECK = pdata.DECK_WIDTH  # sumber tunggal: project/project_data.py
 H_CROWN = 1.50          # tinggi di CL (dari dasar badan)
-CROSSFALL = 0.02       #gradien deck
-T_TIP = 0.21           #tebal ujung sayap
-T_KINK = 0.4624        #tebal ketiak
-Z_KINK = 2.7457        #jarak ketiak dari center
-Z_BOT = 1.6923         #lebar setengah bottom slab
+CROSSFALL = 0.02        # gradien permukaan atas deck
+T_TIP = 0.21            # tebal ujung sayap
+T_KINK = 0.4624         # tebal ketiak
+Z_KINK = 2.5182         # jarak ketiak dari center
+Z_BOT = 1.6923          # lebar setengah bottom slab
 
-Y_KINK = H_CROWN - CROSSFALL * Z_KINK - T_KINK          # muka bawah di Z_KINK
-Y_TIP = H_CROWN - CROSSFALL * (B_DECK / 2.0) - T_TIP    # muka bawah di ujung
+Y_KINK = H_CROWN - CROSSFALL * Z_KINK - T_KINK          # posisi y pada ketiak box
+Y_TIP = H_CROWN - CROSSFALL * (B_DECK / 2.0) - T_TIP    # posisi y pada tip bawah
 
 # (z, y_pusat dari dasar, diameter)
 DRUM_BESAR = ((-0.625, 0.725, 0.500), (0.625, 0.725, 0.500))
 DRUM_KECIL = ((-1.765, 0.875, 0.280), (1.765, 0.875, 0.280))
 DRUM_KECIL_AKTIF = True
 
-Z_GARIS_DEFAULT = (-5.0, -3.5, 0.0, 3.5, 5.0)
+# z_ref: titik referensi PEMBATAS tributary (bukan posisi node). Garis
+# terluar tepat di tepi deck (+/- B_DECK/2), divalidasi _cek_z_ref.
+Z_GARIS_DEFAULT = pdata.Z_GARIS_REF  # sumber tunggal: project/project_data.py
 
 
 def y_atas(z):
+    """Elevasi permukaan atas deck (m dari dasar badan) di koordinat z."""
     return H_CROWN - CROSSFALL * abs(z)
 
 
 def y_bawah(z):
+    """Elevasi muka bawah penampang (m dari dasar badan) di koordinat z."""
     a = abs(z)
-    if a >= Z_KINK:
+    if a >= Z_KINK:                                     #jika titik yang diketahui diluar ketiak/ bagian sayap
         return Y_TIP + (Y_KINK - Y_TIP) * (B_DECK / 2.0 - a) / (B_DECK / 2.0 - Z_KINK)
     if a >= Z_BOT:
         return Y_KINK * (a - Z_BOT) / (Z_KINK - Z_BOT)
@@ -74,10 +100,12 @@ def y_bawah(z):
 
 
 def kedalaman(z):
+    """Tebal penampang d(z) = y_atas - y_bawah (m), tanpa void."""
     return y_atas(z) - y_bawah(z)
 
 
 def _chord(z, drum):
+    """Panjang tali busur (m) drum void pada koordinat z; 0 bila di luar."""
     zc, _, D = drum
     dz = abs(z - zc)
     r = D / 2.0
@@ -85,6 +113,7 @@ def _chord(z, drum):
 
 
 def _void_list(tipe):
+    """Daftar void tipe ini. Hanya "hollow" yang punya void (lihat audit 2)."""
     if tipe != "hollow":
         return ()
     return DRUM_BESAR + (DRUM_KECIL if DRUM_KECIL_AKTIF else ())
@@ -95,6 +124,7 @@ def _void_list(tipe):
 # ============================================================
 
 def _integral(f, a, b, n=1500):
+    """Integral trapesium f(z) dz pada [a, b] dengan n subinterval."""
     if b <= a:
         return 0.0
     h = (b - a) / n
@@ -105,6 +135,7 @@ def _integral(f, a, b, n=1500):
 
 
 def _batas_strip(z_garis):
+    """Batas tributari: (tepi deck kiri, titik tengah antar z_ref..., kanan)."""
     z = list(z_garis)
     mid = [(z[i] + z[i + 1]) / 2.0 for i in range(len(z) - 1)]
     b = [-B_DECK / 2.0] + mid + [B_DECK / 2.0]
@@ -478,6 +509,30 @@ def z_garis_centroid(
 
 def properti_melintang(dx, tipe="solid", z_garis=None,
                        verbose=False):
+    """
+    Properti elemen MELINTANG (jalur selebar dx) antar dua garis berurutan.
+
+    Parameters
+    ----------
+    dx : float
+        Lebar jalur arah x (m) = lebar tributari stasiun (elements.lebar_tributari).
+    tipe : str
+        "solid" / "hollow" / "tumpuan" (hanya "hollow" memengaruhi geometri).
+    z_garis : sequence, optional
+        Posisi z node (m), naik. Default: centroid strip tipe ini.
+        Di model: nodes.Z_GARIS.
+    verbose : bool
+        Cetak diagnostik J.
+
+    Returns
+    -------
+    list of dict, satu per pasangan garis (len(z_garis) - 1) dengan kunci
+    z1, z2, L, d_rata, d_eq, A, Iz, Iy, J.
+        Iz = dx*d_eq^3/12  (lentur vertikal -> Iz OpenSees)
+        Iy = d_rata*dx^3/12
+        J  = persegi panjang (lihat elements.py CATATAN AUDIT 2)
+    PENTING: argumen pertama adalah dx (m) di arah x, BUKAN jarak antar z.
+    """
     if z_garis is None:
         z_garis = tuple(
             s["z"] for s in _geom(
@@ -571,6 +626,8 @@ def properti_melintang(dx, tipe="solid", z_garis=None,
 # ============================================================
 
 if __name__ == "__main__":
+    # Jalankan dari root repo:  python -m core.section_strips
+    # `contoh` = total VERSI LAMA, hanya demonstrasi (lihat CATATAN AUDIT 3).
     contoh = {
         "solid":  {"A": 8.566952, "Ix": 1.481379, "Iy": 35.853120, "J": 3.8232},
         "hollow": {"A": 8.051160, "Ix": 1.465182, "Iy": 35.309473, "J": 3.7537},
