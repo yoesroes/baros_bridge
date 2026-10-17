@@ -24,6 +24,10 @@ y = tegak lurus sumbu dalam bidang x-y, z = z global):
 Suku z*V adalah momen puntir akibat beban/geser yang tidak simetris
 terhadap sumbu; suku T_i adalah puntir internal tiap garis. Posisi x pada
 grafik = koordinat HORIZONTAL (x = x1 + s cos(a)).
+Beban titik di dalam elemen (KEL bergerak, kasus["pload"] = {tag: [(P, xL)]},
+P vertikal gravitasi negatif, xL fraksi dari ujung-i) menambah, untuk s > a_p
+(a_p = xL * L_aksial) dan komponen tegak lurus Py = P cos(a):
+  M(s) += Py*(s - a_p) ; V(s) += Py ; T(s) += -z*Py.
 """
 
 import math
@@ -69,6 +73,7 @@ def total_per_kasus(hasil, kasus, elemen_result, ds=DS_DEFAULT):
     total = {}
     for nama, h in hasil.items():
         w_kasus = kasus[nama].get("ele", {})
+        p_kasus = kasus[nama].get("pload", {})
         d = {c: {} for c in KATEGORI}
         for (x1, x2, u), eles in segs.items():
             L = panjang_aksial(eles, x1, x2)
@@ -86,6 +91,13 @@ def total_per_kasus(hasil, kasus, elemen_result, ds=DS_DEFAULT):
                     m += vy * s + wy * s * s / 2.0
                     v += vy + wy * s
                     t += h["T_i"][tg] - e["z"] * (vy + wy * s)
+                    for P, xl in p_kasus.get(tg, ()):
+                        a_p = xl * L
+                        if s > a_p:                 # beban titik di kiri s
+                            py = P * e.get("cos_a", 1.0)
+                            m += py * (s - a_p)
+                            v += py
+                            t += -e["z"] * py
                 key = (x1, x2, u, k)
                 d["Mx"][key] = m
                 d["Vx"][key] = v
@@ -100,7 +112,7 @@ def titik_x(key, seg_n):
     return x1 + (x2 - x1) * k / seg_n[(x1, x2, u)]
 
 
-def envelope_desain(total, kasus, kombinasi_list):
+def envelope_desain(total, kasus, kombinasi_list, kel_kedua=True):
     """
     Envelope gabungan beberapa kombinasi.
 
@@ -110,7 +122,7 @@ def envelope_desain(total, kasus, kombinasi_list):
     env_k   : {kombinasi: {kat: {kunci: (lo, hi)}}}
     Lenv    : envelope beban hidup (output.envelope_hidup)
     """
-    Lenv = output.envelope_hidup(total, kasus)
+    Lenv = envelope_hidup_total(total, kasus, kel_kedua=kel_kedua)
     env_k = {k: output.kombinasi_envelope(total, Lenv, k)
              for k in kombinasi_list}
     gab = {}
@@ -165,3 +177,40 @@ def ekstrem_per_unit(env_k, seg_n):
                 if max(abs(tlo), abs(thi)) > r["T_maks"][0]:
                     r["T_maks"] = (max(abs(tlo), abs(thi)), x, kombinasi)
     return hasil
+
+
+def envelope_hidup_total(total, kasus, kel_kedua=True):
+    """
+    Envelope beban hidup untuk gaya dalam TOTAL (kategori Mx, Vx, Tx).
+
+    Sama dengan output.envelope_hidup (BTR per bentang bersifat independen
+    sehingga ekstrem = jumlah bagian positif/negatif; satu KEL pada posisi
+    terburuk) tetapi, bila kel_kedua, momen negatif maksimum (kategori Mx,
+    sisi bawah) menambahkan KEL KEDUA yang identik pada bentang lain
+    (SNI 1725:2016 untuk jembatan menerus): dua nilai KEL paling negatif
+    dari dua bentang berbeda. Kategori lain tetap memakai satu KEL.
+    """
+    btr, kel = output.kelompokkan(kasus)
+    if not btr or not kel:
+        raise ValueError("Kasus BTR/KEL tidak ditemukan.")
+    Lenv = {}
+    for cat, isi in total["D1"].items():
+        Lenv[cat] = {}
+        for key in isi:
+            lo, hi = float("inf"), float("-inf")
+            for o in btr:
+                b = [total[n][cat][key] for n in btr[o]]
+                kv = [(total[n][cat][key], kasus[n]["bentang"])
+                      for n in kel[o]]
+                hi = max(hi, sum(max(0.0, v) for v in b)
+                         + max(v for v, _ in kv))
+                lo_o = sum(min(0.0, v) for v in b) + min(v for v, _ in kv)
+                if kel_kedua and cat == "Mx":
+                    v1, k1 = min(kv)
+                    lain = [v for v, kk in kv if kk != k1]
+                    if lain:
+                        lo_o = sum(min(0.0, v) for v in b) + v1 \
+                            + min(0.0, min(lain))
+                lo = min(lo, lo_o)
+            Lenv[cat][key] = (lo, hi)
+    return Lenv

@@ -8,9 +8,10 @@ Cara kerja
 Hasil kasus dasar (analysis.py) dikombinasikan secara linear:
 
   beban hidup L (envelope, per respon):
-    Lmax = sum_k max(0, BTR_k) + max_k,f KEL_k,f
-    Lmin = sum_k min(0, BTR_k) + min_k,f KEL_k,f
-    dihitung per offset lajur, lalu diambil yang menentukan.
+    Lmax = sum_k max(0, BTR_k) + max_pattern KEL
+    Lmin = sum_k min(0, BTR_k) + min_pattern KEL
+    BTR dipilih per offset lajur, lalu dikombinasikan dengan envelope BGT
+    full-width yang mengikuti pola SNI.
   kombinasi: V = f_D1*D1 + f_D2*D2 + f_L*L   (faktor dari loads.KOMBINASI)
 
 Keterbatasan: faktor beban mati minimum (pengurangan beban mati) belum
@@ -50,8 +51,8 @@ Konvensi tanda
 
 CATATAN AUDIT
 -------------
-1. Envelope L memakai superposisi linear BTR per bentang + KEL pada posisi
-   yang tersedia di analysis (default hanya tengah bentang).
+1. Envelope L memakai superposisi linear BTR per bentang dan pola BGT yang
+   disusun di analysis.py; BGT memakai pola alternatif SNI Gambar 25.
 2. KATEGORI_GAYA memuat T_i dan T_j; plot dan gaya_dalam.csv memakai
     keduanya. Ringkasan print_gaya_dalam hanya mengambil T_i, sedangkan
     gaya_dalam_total.csv tidak mengeluarkan torsi.
@@ -186,6 +187,65 @@ def kelompokkan(kasus):
     return btr, kel
 
 
+def _kelompok_bgt_posisi(kasus, names):
+    """Group single-BGT cases by continuous unit and span order."""
+    groups = {}
+    for name in names:
+        case = kasus[name]
+        unit = case.get("unit")
+        order = case.get("urutan_unit")
+        if unit is None or order is None:
+            # Compatibility for older case dictionaries: each case is its
+            # own independent one-BGT pattern.
+            unit, order = ("legacy", case.get("bentang", name))
+        groups.setdefault(unit, {}).setdefault(order, []).append(name)
+    return {unit: {span: sorted(items, key=lambda n: kasus[n].get("f", 0.0))
+                   for span, items in sorted(spans.items())}
+            for unit, spans in groups.items()}
+
+
+def _kel_pattern_bounds(kasus, names, values):
+    """Envelope single BGT positions and adjacent-span BGT pairs from SNI."""
+    groups = _kelompok_bgt_posisi(kasus, names)
+    highs, lows = [], []
+    for spans in groups.values():
+        ordered = sorted(spans)
+        span_hi = {i: max(values[n] for n in spans[i]) for i in ordered}
+        span_lo = {i: min(values[n] for n in spans[i]) for i in ordered}
+        highs.extend(span_hi.values())
+        lows.extend(span_lo.values())
+        for left, right in zip(ordered, ordered[1:]):
+            highs.append(span_hi[left] + span_hi[right])
+            lows.append(span_lo[left] + span_lo[right])
+    if not highs:
+        raise ValueError("Kasus posisi BGT tidak ditemukan.")
+    # Zero represents a BGT pattern on another disconnected unit with no
+    # effect on this response key.
+    return min(0.0, min(lows)), max(0.0, max(highs))
+
+
+def _kel_pattern_curves(kasus, groups, s, maximize):
+    """Return BGT curve candidates: one span, or a pair across a pier."""
+    candidates = [(0.0, 0.0, 0.0)]
+    for unit, spans in groups.items():
+        ordered = sorted(spans)
+        active = {}
+        for i in ordered:
+            curves = spans[i]
+            active[i] = (max if maximize else min)(
+                curves, key=lambda curve: _poly_value(curve, s))
+        candidates.extend(active.values())
+        for left, right in zip(ordered, ordered[1:]):
+            candidates.append(_poly_add(active[left], active[right]))
+    return candidates
+
+
+def _select_kel_pattern_curve(candidates_by_unit, s, maximize):
+    """Select the governing BGT single-span or adjacent-span pattern curve."""
+    return (max if maximize else min)(
+        candidates_by_unit, key=lambda curve: _poly_value(curve, s))
+
+
 def envelope_hidup(hasil, kasus):
     """
     Envelope beban hidup per kategori dan kunci: {cat: {key: (Lmin, Lmax)}}
@@ -199,11 +259,15 @@ def envelope_hidup(hasil, kasus):
         Lenv[cat] = {}
         for key in isi:
             lo, hi = float("inf"), float("-inf")
+            k_names = kel.get(0.0, next(iter(kel.values())))
+            k_lo, k_hi = _kel_pattern_bounds(
+                kasus, k_names,
+                {n: hasil[n][cat][key] for n in k_names})
             for o in btr:
                 b = [hasil[n][cat][key] for n in btr[o]]
-                k = [hasil[n][cat][key] for n in kel[o]]
-                hi = max(hi, sum(max(0.0, v) for v in b) + max(k))
-                lo = min(lo, sum(min(0.0, v) for v in b) + min(k))
+                # BGT full-width tidak bergantung pada offset lajur BTR.
+                hi = max(hi, sum(max(0.0, v) for v in b) + k_hi)
+                lo = min(lo, sum(min(0.0, v) for v in b) + k_lo)
             Lenv[cat][key] = (lo, hi)
     return Lenv
 
@@ -267,6 +331,45 @@ def _poly_roots_in_interval(poly, length):
     return [root for root in roots if 0.0 < root < length]
 
 
+def _linear_envelope_breaks(curves, length):
+    """Breakpoints of upper/lower envelopes for a collection of straight lines."""
+    if any(abs(curve[2]) > 1.0e-12 for curve in curves):
+        breaks = []
+        for i, left in enumerate(curves):
+            for right in curves[i + 1:]:
+                breaks.extend(_poly_roots_in_interval(
+                    tuple(a - b for a, b in zip(left, right)), length))
+        return breaks
+
+    breaks = []
+    for sign in (1.0, -1.0):
+        lines = sorted((sign * curve[1], sign * curve[0])
+                       for curve in curves)
+        unique = []
+        for slope, intercept in lines:
+            if unique and abs(slope - unique[-1][0]) <= 1.0e-12:
+                if intercept > unique[-1][1]:
+                    unique[-1] = (slope, intercept)
+            else:
+                unique.append((slope, intercept))
+        hull, starts = [], []
+        for slope, intercept in unique:
+            start = float("-inf")
+            while hull:
+                old_slope, old_intercept = hull[-1]
+                start = (old_intercept - intercept) / (slope - old_slope)
+                if start > starts[-1]:
+                    break
+                hull.pop()
+                starts.pop()
+            if not hull:
+                start = float("-inf")
+            hull.append((slope, intercept))
+            starts.append(start)
+        breaks.extend(x for x in starts[1:] if 0.0 < x < length)
+    return breaks
+
+
 def _moment_envelope_branches(hasil, kasus, elemen, kombinasi):
     """Return exact low/high quadratic envelope branches and their intervals."""
     tag = elemen["tag"]
@@ -285,26 +388,47 @@ def _moment_envelope_branches(hasil, kasus, elemen, kombinasi):
     branches = []
 
     for offset, btr_names in btr_by_offset.items():
-        kel_names = kel_by_offset.get(offset, [])
+        kel_names = kel_by_offset.get(offset, kel_by_offset.get(0.0, []))
         if not kel_names:
             raise ValueError("Kasus KEL tidak ditemukan untuk offset {}".format(offset))
         btr_curves = {
             name: _moment_curve(hasil, kasus, tag, elemen, name)
             for name in btr_names
         }
-        kel_curves = {
-            name: _moment_curve(hasil, kasus, tag, elemen, name)
-            for name in kel_names
+        kel_groups = _kelompok_bgt_posisi(kasus, kel_names)
+        kel_span_curves = {
+            unit: {
+                order: [_moment_curve(hasil, kasus, tag, elemen, name)
+                        for name in names]
+                for order, names in spans.items()
+            }
+            for unit, spans in kel_groups.items()
         }
 
-        breaks = [0.0, length]
+        base_breaks = [0.0, length]
         for curve in btr_curves.values():
-            breaks.extend(_poly_roots_in_interval(curve, length))
-        kel_items = list(kel_curves.items())
-        for index, (_, left) in enumerate(kel_items):
-            for _, right in kel_items[index + 1:]:
-                breaks.extend(_poly_roots_in_interval(
-                    tuple(a - b for a, b in zip(left, right)), length))
+            base_breaks.extend(_poly_roots_in_interval(curve, length))
+        for spans in kel_span_curves.values():
+            for curves in spans.values():
+                base_breaks.extend(_linear_envelope_breaks(curves, length))
+        base_breaks = sorted(set(base_breaks))
+
+        # Split where alternative SNI patterns exchange control within each
+        # interval where the governing single-span BGT positions are fixed.
+        pattern_breaks = []
+        for left, right in zip(base_breaks, base_breaks[1:]):
+            mid = 0.5 * (left + right)
+            for maximize in (True, False):
+                candidates = _kel_pattern_curves(
+                    kasus, kel_span_curves, mid, maximize)
+                for i, first in enumerate(candidates):
+                    for second in candidates[i + 1:]:
+                        pattern_breaks.extend(
+                            root for root in _poly_roots_in_interval(
+                                tuple(a - b for a, b in zip(first, second)),
+                                length)
+                            if left < root < right)
+        breaks = sorted(base_breaks + pattern_breaks)
         breaks.sort()
         unique_breaks = []
         for point in breaks:
@@ -322,12 +446,14 @@ def _moment_envelope_branches(hasil, kasus, elemen, kombinasi):
                 elif value < 0.0:
                     live_low = _poly_add(live_low, curve)
 
-            kel_values = {name: _poly_value(curve, mid_s)
-                          for name, curve in kel_curves.items()}
-            high_kel = max(kel_values, key=kel_values.get)
-            low_kel = min(kel_values, key=kel_values.get)
-            live_high = _poly_add(live_high, kel_curves[high_kel])
-            live_low = _poly_add(live_low, kel_curves[low_kel])
+            high_kel = _select_kel_pattern_curve(
+                _kel_pattern_curves(kasus, kel_span_curves, mid_s, True),
+                mid_s, True)
+            low_kel = _select_kel_pattern_curve(
+                _kel_pattern_curves(kasus, kel_span_curves, mid_s, False),
+                mid_s, False)
+            live_high = _poly_add(live_high, high_kel)
+            live_low = _poly_add(live_low, low_kel)
 
             high_curve = _poly_add(base, live_high, f_live)
             low_curve = _poly_add(base, live_low, f_live)
@@ -419,16 +545,28 @@ def _moment_envelope_at(hasil, kasus, elemen, kombinasi, s):
             _poly_value(_moment_curve(hasil, kasus, tag, elemen, name), s)
             for name in btr_names
         ]
-        kel_values = [
-            _poly_value(_moment_curve(hasil, kasus, tag, elemen, name), s)
-            for name in kel_by_offset.get(offset, [])
-        ]
+        kel_names = kel_by_offset.get(offset, kel_by_offset.get(0.0, []))
+        kel_groups = _kelompok_bgt_posisi(kasus, kel_names)
+        kel_span_curves = {
+            unit: {
+                order: [_moment_curve(hasil, kasus, tag, elemen, name)
+                        for name in names]
+                for order, names in spans.items()
+            }
+            for unit, spans in kel_groups.items()
+        }
+        kel_high_curve = _select_kel_pattern_curve(
+            _kel_pattern_curves(kasus, kel_span_curves, s, True), s, True)
+        kel_low_curve = _select_kel_pattern_curve(
+            _kel_pattern_curves(kasus, kel_span_curves, s, False), s, False)
+        kel_high = _poly_value(kel_high_curve, s)
+        kel_low = _poly_value(kel_low_curve, s)
         live_high = max(live_high,
                         sum(max(0.0, value) for value in btr_values)
-                        + max(kel_values))
+                        + kel_high)
         live_low = min(live_low,
                        sum(min(0.0, value) for value in btr_values)
-                       + min(kel_values))
+                       + kel_low)
     f_live = factors.get("L", 0.0)
     low, high = base + f_live * live_low, base + f_live * live_high
     return (low, high) if low <= high else (high, low)
@@ -939,4 +1077,3 @@ def laporan(hasil, kasus, node_result, bc_list, bentang, out_dir,
     else:
         print("Sanity checks dilewati: elemen_result tidak tersedia.")
     return Lenv, urutan
-

@@ -41,8 +41,9 @@ Urutan argumen elasticBeamColumn: A, E, G, J, Iy, Iz.
 
 Tag
 ---
-Elemen memanjang 1.. (urut garis j, lalu stasiun i); melintang 1001..
-(urut stasiun, lalu j). Batas 1000 elemen memanjang TIDAK divalidasi.
+Elemen memanjang 1.. (urut garis j, lalu stasiun i); tag elemen melintang
+dimulai setelah tag memanjang terbesar agar tidak bertabrakan saat mesh
+dipadatkan untuk sapuan posisi BGT.
 geomTransf: 1 = deck memanjang, 2 = deck melintang, 3 = pier
 [PLACEHOLDER: TRANSF_PIER tidak didefinisikan/dipakai di repo ini].
 
@@ -73,7 +74,7 @@ except ImportError:
 # ============================================================
 
 TAG_MEMANJANG_START = 1
-TAG_MELINTANG_START = 1001   # elemen memanjang harus < 1001 (tidak divalidasi)
+TAG_MELINTANG_START = 1001   # fallback untuk pemanggilan langsung
 
 TRANSF_MEMANJANG = 1   # vecxz = (0, 0, 1)
 TRANSF_MELINTANG = 2   # vecxz = (1, 0, 0)
@@ -191,7 +192,8 @@ def buat_elemen_memanjang(node_result, section_map, box_sections,
     return elemen_list
 
 
-def buat_elemen_melintang(node_result, section_map, E=E_BOX, G=G_BOX):
+def buat_elemen_melintang(node_result, section_map, E=E_BOX, G=G_BOX,
+                          tag_start=TAG_MELINTANG_START):
     """
     Buat elemen melintang di setiap stasiun (termasuk kedua sisi EJ).
     Properti dari jalur selebar dx, tipe section di x stasiun, dan
@@ -202,7 +204,7 @@ def buat_elemen_melintang(node_result, section_map, E=E_BOX, G=G_BOX):
     z_garis = node_result["z_garis"]
 
     elemen_list = []
-    ele_tag = TAG_MELINTANG_START
+    ele_tag = tag_start
 
     for i, st in enumerate(stasiun):
         dx = lebar_tributari(stasiun, i)
@@ -243,7 +245,8 @@ def buat_semua_elemen(node_result, section_map, box_sections):
     define_geom_transf()
 
     memanjang = buat_elemen_memanjang(node_result, section_map, box_sections)
-    melintang = buat_elemen_melintang(node_result, section_map)
+    melintang = buat_elemen_melintang(
+        node_result, section_map, tag_start=max(e["tag"] for e in memanjang) + 1)
 
     return {
         "memanjang": memanjang,

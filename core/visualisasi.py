@@ -247,6 +247,22 @@ def beban_ekuivalen_nodal(kasus, elemen_result):
                 v = d.setdefault(n, {"Fy": 0.0, "Mz": 0.0})
                 v["Fy"] += q * L / 2.0
                 v["Mz"] += sg * q * c * L * L / 12.0
+        for tag, daftar in k.get("pload", {}).items():
+            e = ele[tag]
+            L = e.get("L_aksial", e["x2"] - e["x1"])
+            c, sn = e.get("cos_a", 1.0), e.get("sin_a", 0.0)
+            for P, xl in daftar:                 # beban titik vertikal P
+                a_, b_ = xl * L, L - xl * L
+                py, px = P * c, P * sn
+                v1 = py * b_ * b_ * (3 * a_ + b_) / L ** 3
+                v2 = py * a_ * a_ * (a_ + 3 * b_) / L ** 3
+                f1, f2 = px * b_ / L, px * a_ / L
+                for n, vl, fl, mz in (
+                        (e["n1"], v1, f1, py * a_ * b_ * b_ / L ** 2),
+                        (e["n2"], v2, f2, -py * a_ * a_ * b_ / L ** 2)):
+                    t = d.setdefault(n, {"Fy": 0.0, "Mz": 0.0})
+                    t["Fy"] += vl * c + fl * sn       # komponen vertikal global
+                    t["Mz"] += mz
         for n, fy in k.get("node", {}).items():
             d.setdefault(n, {"Fy": 0.0, "Mz": 0.0})["Fy"] += fy
         out[nama] = d

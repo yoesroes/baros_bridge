@@ -60,7 +60,9 @@ SUPPORTS = {
     "A2": {"x": 204.4944,  "y": 739.7198, "type": "abutment"},
 }
 
-# [REFERENSI] Bentang: (dari, ke, panjang L (m), selisih elevasi (m)).
+# [REFERENSI] Bentang: (dari, ke, panjang L (m), KELANDAIAN (%)).
+# Kolom ke-4 = 100 x beda elevasi / L (mis. A1-P1: 0.661 m / 16.2472 m = 4.068 %),
+# BUKAN selisih elevasi dalam meter. Diperiksa otomatis oleh SC-18.
 # Kode memakai analysis.daftar_bentang(SUPPORTS), BUKAN list ini; list ini
 # hanya untuk pembanding manual (jumlah L harus = 204.4944 m).
 SPANS = [
@@ -338,6 +340,19 @@ BEARING_TABEL = {
 KAPASITAS_BEARING = {}
 
 # ============================================================
+# DASAR REGULASI FAKTOR KOMBINASI (DIISI OLEH PERENCANA)   [AKTIF]
+# ============================================================
+# Salin dari dokumen standar yang berlaku pada kontrak (bukan dari ingatan).
+# Kosong = SC-20 "NOT ASSESSED". Contoh bentuk:
+#   DASAR_REGULASI = "SNI 1725:2016 <pasal/tabel>"
+#   KOMBINASI_REFERENSI = {"Strength I": {"D1": ..., "D2": ..., "L": ...}}
+# D1 = berat sendiri (MS), D2 = beban mati tambahan (MA), L = beban lajur
+# D (TD). Faktor MS bergantung bahan/cara konstruksi (pracetak vs cor di
+# tempat) dan keadaan (biasa vs terkurangi).
+DASAR_REGULASI = ""
+KOMBINASI_REFERENSI = {}
+
+# ============================================================
 # KONFIGURASI REVIEW (pemeriksaan kewajaran)               [AKTIF]
 # ============================================================
 # Ambang di bawah adalah ambang SCREENING, bukan kriteria kode. Ubah sesuai
@@ -353,6 +368,8 @@ REVIEW = {
     "tol_sensitivitas": 0.05,        # SC-12: selisih antar konfigurasi garis
     "tol_referensi": None,           # SC-14: pita penerimaan model referensi
     "tol_beban_d1": 0.02,            # SC-13: D1 model vs integrasi luas
+    "tol_diafragma_m": 0.5,          # SC-19: pusat diafragma vs garis support (m)
+    "ambang_kel_gap": 0.10,          # SC-17: jarak posisi KEL / panjang bentang
 }
 
 # ============================================================
@@ -429,7 +446,8 @@ INFO = {
     "elevasi_A1": 740.7678,
     "elevasi_A2": 739.7198,
     "elevasi_puncak": 744.1168,
-    "selisih_elevasi": 4.397,
+    "rentang_elevasi": 4.397,            # elevasi tertinggi - terendah (P4/P5 - A2)
+    "selisih_elevasi_A1_A2": -1.048,    # elevasi A2 - elevasi A1
     "jumlah_bentang": 9,
     "jumlah_support": 10,
     "jumlah_pier": 8,

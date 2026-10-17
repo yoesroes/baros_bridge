@@ -29,6 +29,10 @@ SC-13  akuntansi beban independen (D1 dari luas, D2, lebar jalan terbebani)
 SC-14  perbandingan model referensi (benchmark/reference_reaksi.csv)
 SC-15  pembanding terhadap TABEL BEARING (beban rencana, bukan kapasitas)
 SC-16  orientasi beban dan keseimbangan horizontal (gelagar miring)
+SC-17  cakupan posisi KEL (KEL bergerak, rapat per bentang)
+SC-18  konsistensi data [REFERENSI] (SPANS, INFO) terhadap [AKTIF] (SUPPORTS)
+SC-19  penempatan segmen tumpuan (diafragma) terhadap garis support
+SC-20  dasar regulasi faktor kombinasi (butuh KOMBINASI_REFERENSI proyek)
 DC-01  kapasitas bearing (butuh KAPASITAS_BEARING)
 DC-02  uplift / reaksi negatif
 DC-03..DC-06  lentur, geser, torsi, tegangan lokal (ringkasan demand)
@@ -52,6 +56,8 @@ KONFIG_DEFAULT = {
     "ambang_bearing_tabel": 1.05,
     "ambang_bearing_rendah": 0.70,
     "ambang_ketimpangan_permanen": 0.05,
+    "ambang_kel_gap": 0.10,
+    "tol_diafragma_m": 0.5,
     "tol_sensitivitas": 0.05,
     "tol_referensi": None,
     "tol_beban_d1": 0.02,
@@ -163,6 +169,10 @@ def sc07_momen(ctx, k):
             F.append((q * L, (e["x1"] + e["x2"]) / 2.0, e["z"]))
         for n, fy in kas.get("node", {}).items():
             F.append((fy, coords[n][0], coords[n][2]))
+        for tag, daftar in kas.get("pload", {}).items():
+            e = ele[tag]
+            for P, xl in daftar:               # KEL di dalam elemen
+                F.append((P, e["x1"] + xl * (e["x2"] - e["x1"]), e["z"]))
         h = ctx["hasil"][nama]
         R = h["R"]
         for b in bc:
@@ -744,6 +754,178 @@ def sc16_orientasi(ctx, k):
               + info, lokasi=terburuk[1])
 
 
+def sc17_kel(ctx, k):
+    """
+    KEL adalah beban bergerak: posisi terburuk berbeda untuk tiap respons
+    (puncak garis pengaruh). Diperiksa rapatnya posisi KEL yang dianalisis
+    per bentang (termasuk tepat di tumpuan), bukan nilai respons.
+    """
+    kasus = ctx["kasus"]
+    kel = [v for v in kasus.values() if v["jenis"] == "KEL"]
+    if not kel:
+        return _t("SC-17", "Cakupan posisi KEL", "NOT ASSESSED", None,
+                  "Kasus KEL diperlukan", "Tidak ada kasus KEL.")
+    o0 = min(v["offset"] for v in kel)
+    baris, terburuk = [], (0.0, "")
+    for b in ctx["bentang"]:
+        xs = sorted({v["x"] for v in kel
+                     if v["offset"] == o0 and v.get("x") is not None
+                     and b["x1"] - 1e-6 <= v["x"] <= b["x2"] + 1e-6})
+        xs = sorted(set(xs) | {b["x1"], b["x2"]}) if len(xs) > 1 else xs
+        gap = max((c - a for a, c in zip(xs[:-1], xs[1:])), default=b["L"])
+        rel = gap / b["L"]
+        baris.append({"bentang": b["nama"], "posisi": len(xs),
+                      "gap_maks_m": round(gap, 2), "gap_rel": round(rel, 3)})
+        if rel > terburuk[0]:
+            terburuk = (rel, b["nama"])
+    ok = terburuk[0] <= k["ambang_kel_gap"] + 1e-9
+    detail = ("Posisi KEL per bentang (offset {:+.2f}): ".format(o0)
+              + ", ".join("{} {} posisi, jarak maks {:.1f} m".format(
+                  r["bentang"], r["posisi"], r["gap_maks_m"])
+                  for r in baris) + ". ")
+    detail += ("KEL kedua pada bentang lain untuk momen negatif maksimum "
+               "(SNI 1725:2016) dipakai pada gaya dalam total (Mu-).")
+    return _t("SC-17", "Cakupan posisi KEL", "PASS" if ok else "WARNING",
+              round(terburuk[0], 3),
+              "Jarak antar posisi KEL <= {:.0%} panjang bentang (termasuk "
+              "tepat di tumpuan)".format(k["ambang_kel_gap"]), detail,
+              lokasi="" if ok else terburuk[1], bukti=baris)
+
+def sc18_data_referensi(ctx, k):
+    """SPANS dan INFO tidak dibaca kode tetapi dipakai cek manual: harus
+    konsisten dengan SUPPORTS dan SECTION_MAP. Kolom ke-4 SPANS adalah
+    kelandaian (%) = beda elevasi / L x 100."""
+    pdata = ctx["pdata"]
+    sup = sorted(pdata.SUPPORTS.items(), key=lambda kv: kv[1]["x"])
+    masalah, bukti = [], []
+    spans = getattr(pdata, "SPANS", None)
+    if spans:
+        L_sum = 0.0
+        for (n1, n2, L, kel), ((a, da), (b, db)) in zip(
+                spans, zip(sup[:-1], sup[1:])):
+            L_ref = db["x"] - da["x"]
+            dy = db["y"] - da["y"]
+            g = 100.0 * dy / L_ref
+            L_sum += L
+            ok = (n1, n2) == (a, b) and abs(L - L_ref) < 1e-3 \
+                and abs(kel - g) < 0.01
+            bukti.append({"bentang": "{}-{}".format(n1, n2), "L": L,
+                          "L_support": round(L_ref, 4), "kelandaian_pct": kel,
+                          "kelandaian_support": round(g, 3), "ok": ok})
+            if not ok:
+                masalah.append("SPANS {}-{}: L = {} / kelandaian = {} vs "
+                               "SUPPORTS {:.4f} m / {:.3f} %".format(
+                                   n1, n2, L, kel, L_ref, g))
+        if len(spans) != len(sup) - 1:
+            masalah.append("jumlah SPANS {} != jumlah bentang SUPPORTS {}"
+                           .format(len(spans), len(sup) - 1))
+    info = getattr(pdata, "INFO", {}) or {}
+    ys = [d["y"] for _, d in sup]
+    xs_sec = [x for a, b, _ in pdata.SECTION_MAP for x in (a, b)]
+    turun = {
+        "panjang_A1_A2": sup[-1][1]["x"] - sup[0][1]["x"],
+        "panjang_total": max(xs_sec) - min(xs_sec),
+        "elevasi_A1": sup[0][1]["y"], "elevasi_A2": sup[-1][1]["y"],
+        "elevasi_puncak": max(ys),
+        "rentang_elevasi": max(ys) - min(ys),
+        "selisih_elevasi_A1_A2": sup[-1][1]["y"] - sup[0][1]["y"],
+        "jumlah_bentang": len(sup) - 1, "jumlah_support": len(sup),
+        "jumlah_pier": sum(1 for _, d in sup if d["type"] == "pier"),
+        "jumlah_abutment": sum(1 for _, d in sup if d["type"] == "abutment"),
+        "jumlah_segmen_mapping": len(pdata.SECTION_MAP)}
+    for key, ref in turun.items():
+        if key in info and abs(info[key] - ref) > 1e-3:
+            masalah.append("INFO[{}] = {} vs turunan {:.4f}".format(
+                key, info[key], ref))
+        elif key in info:
+            bukti.append({"info": key, "nilai": info[key], "ok": True})
+    if "selisih_elevasi" in info:          # nama lama yang ambigu
+        masalah.append("INFO['selisih_elevasi'] = {} ambigu (rentang "
+                       "elevasi = {:.3f}; A2-A1 = {:.3f}); pakai "
+                       "'rentang_elevasi' atau 'selisih_elevasi_A1_A2'"
+                       .format(info["selisih_elevasi"],
+                               turun["rentang_elevasi"],
+                               turun["selisih_elevasi_A1_A2"]))
+    status = "PASS" if not masalah else "WARNING"
+    return _t("SC-18", "Konsistensi data referensi vs data aktif", status,
+              len(masalah),
+              "SPANS (L, kelandaian %) dan INFO sama dengan turunan dari "
+              "SUPPORTS dan SECTION_MAP",
+              "Data referensi konsisten dengan SUPPORTS dan SECTION_MAP."
+              if not masalah else "; ".join(masalah) + ".",
+              bukti=bukti)
+
+
+def sc19_diafragma(ctx, k):
+    """Segmen tipe 'tumpuan' (diafragma) seharusnya berpusat pada garis
+    support (pola seragam antar support). Ditandai bila pusat segmen
+    terdekat berjarak > tol_diafragma_m atau support berada di luar segmen."""
+    pdata = ctx["pdata"]
+    tump = [(a, b) for a, b, t in pdata.SECTION_MAP if t == "tumpuan"]
+    tol = k["tol_diafragma_m"]
+    baris, masalah = [], []
+    for nm, d in sorted(pdata.SUPPORTS.items(), key=lambda kv: kv[1]["x"]):
+        a, b = min(tump, key=lambda s: abs((s[0] + s[1]) / 2 - d["x"]))
+        pusat = (a + b) / 2 - d["x"]
+        di_dalam = a - 1e-6 <= d["x"] <= b + 1e-6
+        tipe = next((t for aa, bb, t in pdata.SECTION_MAP
+                     if aa <= d["x"] <= bb), "-")
+        ujung = d.get("type") == "abutment"
+        baris.append({"support": nm, "x": d["x"], "segmen": [a, b],
+                      "awal_minus_x": round(a - d["x"], 3),
+                      "pusat_minus_x": round(pusat, 3),
+                      "di_dalam": di_dalam, "tipe_di_x": tipe})
+        if not di_dalam:
+            masalah.append("{}: berada di segmen '{}', segmen tumpuan "
+                           "terdekat {:.3f}..{:.3f} m".format(nm, tipe, a, b))
+        elif not ujung and abs(pusat) > tol:
+            masalah.append("{}: pusat diafragma {:+.2f} m dari garis "
+                           "support".format(nm, pusat))
+    status = "PASS" if not masalah else "WARNING"
+    return _t("SC-19", "Penempatan diafragma tumpuan terhadap garis support",
+              status, len(masalah),
+              "Pusat segmen tumpuan <= {:.2f} m dari garis support dan "
+              "support berada di dalam segmen (pola seragam)".format(tol),
+              ("Penempatan seragam." if not masalah else
+               "Tidak seragam: " + "; ".join(masalah) + ". Kemungkinan "
+               "artefak digitasi gambar; konfirmasi ke gambar rencana."),
+              lokasi=", ".join(m.split(":")[0] for m in masalah),
+              bukti=baris)
+
+
+def sc20_dasar_faktor(ctx, k):
+    """Faktor kombinasi di loads.KOMBINASI dibandingkan dengan tabel faktor
+    dasar regulasi proyek (project_data.KOMBINASI_REFERENSI) bila diberikan.
+    Tabel itu harus disalin dari dokumen standar yang berlaku di kontrak;
+    modul ini tidak menanam angka standar."""
+    pdata, loads = ctx["pdata"], ctx["loads"]
+    dasar = getattr(pdata, "DASAR_REGULASI", "") or ""
+    ref = getattr(pdata, "KOMBINASI_REFERENSI", None) or {}
+    if not dasar or not ref:
+        return _t("SC-20", "Dasar regulasi faktor kombinasi", "NOT ASSESSED",
+                  None, "DASAR_REGULASI dan KOMBINASI_REFERENSI diisi "
+                  "perencana dari dokumen standar kontrak",
+                  "Dasar regulasi belum dinyatakan pada project_data. Faktor "
+                  "di loads.KOMBINASI (Strength I = 1.2 D1 + 2.0 D2 + 1.8 L) "
+                  "tidak dapat dinilai terhadap standar tertentu. Faktor "
+                  "berat sendiri bergantung pada bahan dan cara konstruksi "
+                  "(mis. beton pracetak vs cor di tempat).")
+    beda = []
+    for nama, faktor in ref.items():
+        kode = loads.KOMBINASI.get(nama)
+        if kode is None:
+            beda.append("{}: tidak ada di loads.KOMBINASI".format(nama))
+            continue
+        for kk, v in faktor.items():
+            if abs(kode.get(kk, 0.0) - v) > 1e-9:
+                beda.append("{} {}: kode {} vs referensi {}".format(
+                    nama, kk, kode.get(kk, 0.0), v))
+    return _t("SC-20", "Dasar regulasi faktor kombinasi",
+              "PASS" if not beda else "WARNING", len(beda),
+              "Faktor kode = KOMBINASI_REFERENSI ({})".format(dasar),
+              "Faktor sesuai referensi." if not beda else
+              "; ".join(beda) + ".", bukti=[{"selisih": b} for b in beda])
+
 def dc01_kapasitas(ctx, k):
     kap = getattr(ctx["pdata"], "KAPASITAS_BEARING", {}) or {}
     if not kap:
@@ -876,6 +1058,29 @@ ATURAN = {
                "miring tanpa uraian ke sumbu lokal"],
               ["Uraikan beban dengan analysis.komponen_lokal "
                "(Wy = q cos a, Wx = q sin a) dan ulangi analisis."]),
+    "SC-17": ("Posisi KEL yang dianalisis terlalu jarang.",
+              ["KEL hanya di beberapa posisi (mis. tengah bentang atau "
+               "dibulatkan ke stasiun terdekat), sehingga puncak garis "
+               "pengaruh tidak tertangkap"],
+              ["Perbanyak KEL_FRAKSI_DEFAULT di analysis.py (KEL dapat "
+               "diberikan tepat di posisi apa pun)."]),
+    "SC-18": ("Data referensi tidak konsisten dengan data aktif.",
+              ["blok [REFERENSI] tidak ikut diperbarui, atau label kolom "
+               "keliru (kolom ke-4 SPANS = kelandaian %, bukan meter)"],
+              ["Perbaiki atau hapus entri yang stale; hindari memakai SPANS "
+               "dan INFO untuk cek manual sebelum konsisten."]),
+    "SC-19": ("Segmen tumpuan (diafragma) tidak berpusat pada garis support.",
+              ["artefak digitasi gambar (offset sistematis +0.33 m awal "
+               "segmen pada P3-P8)", "stasioning pier berbeda dari gambar "
+               "penampang"],
+              ["Konfirmasi lokasi diafragma pada gambar rencana, lalu "
+               "seragamkan aturan penempatan terhadap garis support "
+               "(dampak numerik terukur kecil, <= 1.1% reaksi bearing)."]),
+    "SC-20": ("Dasar regulasi faktor kombinasi belum dinyatakan.",
+              ["loads.KOMBINASI memakai nama kombinasi gaya AASHTO dengan "
+               "faktor angka tertentu tanpa rujukan standar"],
+              ["Isi project_data.DASAR_REGULASI dan KOMBINASI_REFERENSI dari "
+               "dokumen standar kontrak, lalu ulangi SC-20."]),
     "SC-15": ("Reaksi model melebihi beban SLS pada tabel bearing.",
               ["sistem statis di tabel berbeda dari model (mis. bentang "
                "sederhana vs menerus)", "kombinasi atau beban tambahan di "
@@ -947,6 +1152,10 @@ def jalankan_review(ctx, konfig=None):
     temuan.append(sc14_referensi(ctx, k))
     temuan.append(sc15_tabel(ctx, k))
     temuan.append(sc16_orientasi(ctx, k))
+    temuan.append(sc17_kel(ctx, k))
+    temuan.append(sc18_data_referensi(ctx, k))
+    temuan.append(sc19_diafragma(ctx, k))
+    temuan.append(sc20_dasar_faktor(ctx, k))
     temuan.append(dc01_kapasitas(ctx, k))
     temuan.append(dc02_uplift(ctx, k))
     temuan.extend(dc_demand(ctx, k))

@@ -1,6 +1,6 @@
 loads.py
 BTR: memakai lebar ekuivalen 7,25 m, sehingga 65,25 kN/m (sebelumnya 81). Untuk L > 30 m ada faktor reduksi q (P4–P5: 8,05 kPa), lewat parameter L_beban. Jika dikosongkan, q = 9 kPa (konservatif).
-KEL: sekarang beban terpusat 497,35 kN (hitung_P_kel), bukan kN/m. FBD dihitung dari L_E = √(L_rata² · L_maks) = 29,4 m, jadi hasilnya tetap 0,4.
+KEL: beban terpusat dihitung pada seluruh ROAD_WIDTH = 9,00 m. Dengan intensitas nominal 49 kN/m dan FBD = 0,4, intensitas transversal menjadi 68,6 kN/m dan target total satu KEL = 617,40 kN (hitung_P_kel). Ini asumsi pemodelan konservatif proyek, bukan kewajiban SNI 1725:2016 atau AASHTO. Lebar ekuivalen 7,25 m hanya dipakai untuk BTR.
 Distribusi per garis: ada fungsi baru untuk membagi beban ke 5 garis memanjang (z = −5; −3,5; 0; 3,5; 5). Hasilnya dicek oleh cek_distribusi(): jumlah per garis sama dengan total deck, jadi tidak terhitung 5×.
 Kombinasi: ada hitung_kombinasi_garis() dan hitung_P_kombinasi() untuk beban terfaktor per garis.
 Lain-lain: ele_tag menjadi seg_id. Path /home/yoesroes/... diganti path relatif dari lokasi file. Satu panggilan print_max_kombinasi yang menggandakan output dihapus.

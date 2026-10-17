@@ -26,18 +26,22 @@ hasil diolah core/output.py.
 Hasil tiap kasus (jalankan_kasus), semua sumbu LOKAL OpenSees:
     R   : reaksi vertikal Ry per node tumpuan (kN, + ke atas)
     Uy  : lendutan vertikal tiap node (m)
-    (Mz_i, Mz_j, Vy_i, Vy_j, T_i, T_j): gaya ujung elemen
-    memanjang dari respons "localForce". Komponen diambil
-    dalam sistem koordinat lokal elemen. Konvensi tanda
-    momen internal dan konversi sagging-positif ditangani
-    di output.py.
+    Mz_i, Mz_j, Vy_i, Vy_j, T_i, T_j : gaya ujung elemen memanjang
+          (eleForce). Mz_i dan Mz_j untuk momen internal yang sama
+          berlawanan tanda (konversi sagging-positif ada di output.py).
 
 CATATAN AUDIT
 -------------
-1. Beban BTR/KEL: per bentang (pattern loading) dan per offset lajur;
-   KEL hanya di stasiun terdekat x = x_k + f*L_k dengan f = KEL_FRAKSI_DEFAULT
-   (hanya 0.5, tengah bentang). Posisi KEL lain belum dianalisis, jadi
-   envelope KEL belum menjamin ekstrem sebenarnya.
+1. Beban BTR/KEL: per bentang (pattern loading) dan per offset lajur.
+   KEL bergerak: tiap bentang diberi KEL di x = x_k + f*L_k untuk semua f di
+   KEL_FRAKSI_DEFAULT (0, 0.1, ..., 1.0), tepat di posisi itu. Bila x jatuh
+   pada stasiun, beban diberikan sebagai beban nodal; bila tidak, sebagai
+   beban titik di dalam elemen (-beamPoint) sehingga tidak dibulatkan ke
+   stasiun terdekat. Envelope memilih posisi KEL terburuk per respons
+   (output.envelope_hidup). Untuk momen negatif maksimum pada gelagar
+   menerus, SNI 1725:2016 mensyaratkan KEL kedua yang identik pada bentang
+   lain: lihat gaya_total.envelope_hidup_total (opsi kel_kedua) yang
+   dipakai untuk momen total; reaksi dan gaya per garis memakai satu KEL.
 2. Reduksi BTR memakai L = panjang bentang tunggal; BTR yang dibebani di
    beberapa bentang dijumlahkan di output.py tanpa reduksi L total.
 3. FBD memakai L_E (hitung_L_ekuivalen dari seluruh bentang) yang
@@ -82,7 +86,8 @@ except ImportError:
 
 TS_TAG = 1
 OFFSET_DEFAULT = (0.0, 1.75, -1.75)      # m, lajur penuh 5.5 m
-KEL_FRAKSI_DEFAULT = (0.5,)              # posisi KEL pada bentang (0..1)
+# posisi KEL pada bentang (0..1). 0 dan 1 = tepat di tumpuan (reaksi maks).
+KEL_FRAKSI_DEFAULT = tuple(round(0.1 * i, 2) for i in range(11))
 TOL_KESETIMBANGAN = 1e-6                 # relatif terhadap beban total
 
 # Dasar panjang beban garis (kN/m). Semua beban adalah beban GRAVITASI
@@ -151,6 +156,38 @@ def komponen_lokal(q, cos_a, sin_a):
     return q * cos_a, q * sin_a
 
 
+def beban_kel_di(x_t, b, b_h, P_per_lebar, stasiun, node_map, memanjang,
+                 z_garis):
+    """
+    KEL (beban garis melintang lajur) tepat di x = x_t pada bentang b.
+
+    Beban per garis P_j = P_per_lebar * b_h[j] (kN, gravitasi, negatif).
+    Bila x_t berimpit dengan stasiun pada unit bentang itu: beban nodal;
+    selain itu: beban titik di dalam elemen memanjang yang memuat x_t.
+
+    Returns (fy_nodal {node: P}, pload {tag: [(P, xL)]})  xL = fraksi 0..1
+    dari ujung-i elemen (sepanjang sumbu = fraksi horizontal).
+    """
+    unit = next(e["unit"] for e in memanjang
+                if e["x1"] >= b["x1"] - 1e-6 and e["x2"] <= b["x2"] + 1e-6)
+    fy, pload = {}, {}
+    i_st = next((i for i, s in enumerate(stasiun)
+                 if s["unit"] == unit and abs(s["x"] - x_t) < 1e-6), None)
+    for j in range(len(z_garis)):
+        P = P_per_lebar * b_h[j]
+        if P == 0.0:
+            continue
+        if i_st is not None:
+            fy[node_map[(i_st, j)]] = -P
+        else:
+            e = next(e for e in memanjang
+                     if e["unit"] == unit and e["garis"] == j
+                     and e["x1"] < x_t < e["x2"])
+            pload.setdefault(e["tag"], []).append(
+                (-P, (x_t - e["x1"]) / (e["x2"] - e["x1"])))
+    return fy, pload
+
+
 # ============================================================
 # 3. KASUS BEBAN DASAR
 # ============================================================
@@ -165,6 +202,7 @@ def bangun_kasus(node_result, elemen_result, box_sections, supports,
     -------
     kasus : dict  nama -> {"jenis", "bentang", "offset", "f",
                            "ele": {tag: q}, "node": {node: Fy},
+                           "pload": {tag: [(P, xL)]}  (KEL di dalam elemen),
                            "total": beban vertikal total (kN, negatif ke bawah)}
         q = intensitas beban VERTIKAL (gravitasi) per meter panjang SUMBU
         elemen (kN/m, negatif ke bawah); jalankan_kasus menguraikannya ke
@@ -223,6 +261,7 @@ def bangun_kasus(node_result, elemen_result, box_sections, supports,
 
     # ---- BTR dan KEL ----
     P_kel_per_lebar = loads.hitung_P_kel_per_lebar(L_E)
+    b_kel = loads.lebar_jalan_per_garis(z_garis)
 
     for o in offsets:
         b_h = loads.lebar_beban_hidup_per_garis(z_garis, lane_offset=o)
@@ -240,22 +279,20 @@ def bangun_kasus(node_result, elemen_result, box_sections, supports,
                            "f": None, "ele": wy, "node": {},
                            "total": total_ele(wy)}
 
-            # KEL di bentang b
-            kandidat = [i for i, s in enumerate(stasiun)
-                        if b["x1"] + 1e-6 < s["x"] < b["x2"] - 1e-6]
+            # KEL di bentang b (bergerak: tepat di x_t, tanpa pembulatan)
             for f in kel_fraksi:
+                if f > 1.0 - 1e-9 and b is not bentang[-1]:
+                    continue          # tumpuan bersama = f = 0 bentang berikut
                 x_t = b["x1"] + f * b["L"]
-                i = min(kandidat, key=lambda ii: abs(stasiun[ii]["x"] - x_t))
-                fy = {}
-                for j in range(len(z_garis)):
-                    P = P_kel_per_lebar * b_h[j]
-                    if P != 0.0:
-                        fy[node_map[(i, j)]] = -P
+                fy, pload = beban_kel_di(
+                    x_t, b, b_kel, P_kel_per_lebar, stasiun, node_map,
+                    memanjang, z_garis)
+                total = sum(fy.values()) + sum(
+                    P for lst in pload.values() for P, _ in lst)
                 nama = "KEL|{}|f={:.2f}|o={:+.2f}".format(b["nama"], f, o)
                 kasus[nama] = {"jenis": "KEL", "bentang": b["k"], "offset": o,
                                "f": f, "ele": {}, "node": fy,
-                               "total": sum(fy.values()),
-                               "x": stasiun[i]["x"]}
+                               "pload": pload, "total": total, "x": x_t}
 
     return kasus, bentang
 
@@ -298,6 +335,11 @@ def jalankan_kasus(nama, kasus, bc_nodes, ele_memanjang, semua_node, pid,
                              "tersedia untuk menguraikan beban.".format(tag))
         wy, wx = komponen_lokal(q, *geo[tag])
         ops.eleLoad('-ele', tag, '-type', '-beamUniform', wy, 0.0, wx)
+    for tag, daftar in kasus.get("pload", {}).items():
+        c, sn = geo[tag]
+        for P, xl in daftar:                 # P vertikal -> Py = P cos, Px = P sin
+            ops.eleLoad('-ele', tag, '-type', '-beamPoint', P * c, 0.0, xl,
+                        P * sn)
     for n, fy in kasus["node"].items():
         ops.load(n, 0.0, fy, 0.0, 0.0, 0.0, 0.0)
 
@@ -332,7 +374,7 @@ def jalankan_kasus(nama, kasus, bc_nodes, ele_memanjang, semua_node, pid,
     }
 
     for tag in ele_memanjang:
-        f = ops.eleResponse(tag, "localForce")
+        f = ops.eleForce(tag)
 
         hasil["Mz_i"][tag] = f[5]
         hasil["Mz_j"][tag] = f[11]

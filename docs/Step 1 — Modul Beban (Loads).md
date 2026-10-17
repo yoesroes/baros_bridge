@@ -80,30 +80,42 @@ w_non_struktur = w_aspal + w_trotoar + w_parapet
 
 | Parameter | Simbol | Satuan | Nilai | Sumber |
 |-----------|--------|--------|-------|--------|
-| UDL (beban merata) | q_UDL | kPa | 9.0 | SNI 1725:2016 |
-| Lebar jalan | b_jalan | m | 9.0 | Gambar |
+| BTR (beban terbagi rata) | q_BTR | kPa | 9.0 untuk L ≤ 30 m | Konstanta model |
+| Lebar jalan model | ROAD_WIDTH | m | 9.00 | Data proyek |
+| Lebar ekuivalen BTR | b_ekuivalen | m | 7.25 | 5.5 m penuh + 50% sisa |
+| Intensitas nominal KEL/BGT | P_KEL | kN/m transversal | 49.0 | Konstanta kode saat ini |
+| Faktor dinamis KEL (kasus ini) | FBD | — | 0.4 | L_E ≤ 50 m |
 
-**Rumus:**
-w_hidup = q_UDL × b_jalan
-= 9.0 × 9.0
-= 81.0 kN/m
+**BTR (L ≤ 30 m):**
+w_BTR = q_BTR × b_ekuivalen
+= 9.0 × [5.5 + 0.5 × (9.00 - 5.5)]
+= 9.0 × 7.25 = **65.25 kN/m**
 
+Untuk L > 30 m, q_BTR direduksi sesuai fungsi `hitung_q_btr(L)`; 7.25 m
+merupakan lebar ekuivalen BTR dan bukan basis lebar KEL.
 
-**Catatan:** Belum termasuk KEL (beban garis) dan beban truk. Untuk analisis awal, hanya UDL.
+**KEL/BGT:** intensitas transversal setelah FBD = 49.0 × (1 + 0.4) =
+**68.6 kN/m**. Proyek menerapkan KEL pada seluruh `ROAD_WIDTH = 9.00 m`,
+sehingga target magnitudo satu KEL = 68.6 × 9.00 = **617.40 kN**.
+
+Penggunaan lebar penuh 9.00 m adalah asumsi pemodelan konservatif proyek untuk
+mengantisipasi pembebanan, termasuk pada area yang digunakan sepeda dan sepeda
+motor. Ini keputusan proyek, bukan klaim bahwa SNI 1725:2016 atau AASHTO
+mewajibkan penerapan KEL dengan basis lebar yang sama.
 
 ---
 
 ### 2.4 Beban Total
-w_total = w_box + w_non_struktur + w_hidup
+w_total = w_box + w_non_struktur + w_BTR
 
 
 **Contoh per elemen:**
 
 | Elemen | Tipe | A (m²) | w_box | w_non_struk | w_hidup | w_total |
 |--------|------|--------|-------|-------------|---------|---------|
-| 1 | solid | 8.2231 | 197.35 | 48.85 | 81.0 | 327.20 |
-| 2 | tumpuan | 7.9670 | 191.21 | 48.85 | 81.0 | 321.06 |
-| 4 | hollow | 7.7072 | 184.97 | 48.85 | 81.0 | 314.82 |
+| 1 | solid | 8.2231 | 197.35 | 48.85 | 65.25 | 311.45 |
+| 2 | tumpuan | 7.9670 | 191.21 | 48.85 | 65.25 | 305.31 |
+| 4 | hollow | 7.7072 | 184.97 | 48.85 | 65.25 | 299.07 |
 
 ---
 

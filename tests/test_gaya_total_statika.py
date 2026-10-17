@@ -34,6 +34,17 @@ def _statika(nama, x, u, sisi, kasus, ele, coords, st_unit, bc_list, hasil,
     def kiri(xf):
         return xf <= x + 1e-7 if sisi == "i" else xf < x - 1e-7
 
+    for tag, daftar in kasus[nama].get("pload", {}).items():
+        e = ele[tag]
+        if e["unit"] != u:
+            continue
+        for P, xl in daftar:                         # KEL di dalam elemen
+            xp = e["x1"] + xl * (e["x2"] - e["x1"])
+            if kiri(xp):
+                V += P
+                M += P * (x - xp)
+                T += -e["z"] * P * cos_cut
+
     for n, fy in kasus[nama]["node"].items():
         xf, z = coords[n]
         if st_unit[n] == u and kiri(xf):
@@ -72,6 +83,8 @@ def test_gaya_total_sesuai_statika():
     uji = ["D1", "D2"]
     uji += [n for n in kasus if n.startswith("BTR|P1-P2|o=+1.75")][:1]
     uji += [n for n in kasus if n.startswith("KEL|P6-P7|f=0.50|o=-1.75")][:1]
+    uji += [n for n in kasus if n.startswith("KEL|P4-P5|f=0.30|o=+1.75")][:1]
+    uji += [n for n in kasus if n.startswith("KEL|P7-P8|f=0.70|o=+0.00")][:1]
     uji += [n for n in kasus if n.startswith("BTR|P4-P5|o=+1.75")][:1]
     uji += [n for n in kasus if n.startswith("KEL|P4-P5|f=0.50|o=-1.75")][:1]
     for nama in uji:

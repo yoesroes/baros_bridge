@@ -29,8 +29,9 @@ CATATAN AUDIT
 1. Posisi z node SATU set (centroid strip hollow) dipakai untuk SEMUA tipe
    section; properti tiap tipe dihitung terhadap posisi itu
    (section_strips.properti_garis(..., z_node=Z_GARIS)).
-2. Stasiun dibentuk dari SELURUH x1/x2 SECTION_MAP + x SUPPORTS (dibulatkan
-   6 desimal). Dua x yang berbeda < 1e-6 m akan dianggap sama.
+2. Stasiun dibentuk dari SELURUH x1/x2 SECTION_MAP + x SUPPORTS + grid posisi
+   BGT maksimum 1 m (dibulatkan 6 desimal). Dua x yang berbeda < 1e-6 m
+   akan dianggap sama.
 3. Stasiun dibuat juga di overhang (x = -0.27 dan x > x A2); tidak ada
    tumpuan di sana.
 4. EJ_SUPPORTS = ("P2", "P7") tertulis tetap di sini; EXPANSION_JOINTS di
@@ -41,6 +42,8 @@ Referensi:
 - project_data.SECTION_MAP
 - project_data.SUPPORTS
 """
+
+import math
 
 import openseespy.opensees as ops
 
@@ -65,6 +68,7 @@ except ImportError:
 # ============================================================
 
 Z_GARIS_REF = Z_GARIS_DEFAULT
+BGT_GRID_MAX_SPACING = 1.0  # m; resolusi posisi BGT pada arah memanjang
 
 # Posisi FISIK node grillage = centroid tributary strip (tipe hollow).
 # Z_GARIS_REF hanya referensi PEMBATAS tributary untuk section_strips;
@@ -124,6 +128,15 @@ def kumpulkan_x_unik(section_map, supports=None):
     if supports:
         for nama, data in supports.items():
             x_set.add(round(data["x"], 6))
+
+        # Tambah stasiun maksimum tiap 1 m di dalam setiap bentang. BGT
+        # ditempatkan pada stasiun ini agar posisi kritis dapat disapu tanpa
+        # menggantungkan hasil pada batas segmen penampang yang jarang.
+        support_x = sorted(float(v["x"]) for v in supports.values())
+        for x0, x1 in zip(support_x, support_x[1:]):
+            n_sub = int(math.ceil((x1 - x0) / BGT_GRID_MAX_SPACING))
+            for i in range(1, n_sub):
+                x_set.add(round(x0 + (x1 - x0) * i / n_sub, 6))
 
     return sorted(x_set)
 

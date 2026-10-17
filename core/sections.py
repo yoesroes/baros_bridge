@@ -22,7 +22,7 @@ Sumber: project_data.BOX_SECTIONS (BELUM DIAUDIT, lihat catatan di sana).
 CATATAN AUDIT
 -------------
 1. get_J memprioritaskan BOX_SECTIONS[tipe]["J"] di atas J_VALUES.
-    Nilai keduanya saat ini sama (3.8232 / 3.7533 / 3.1667), sehingga
+    Nilai keduanya saat ini sama (3.8232 / 3.7533 / 3.1661), sehingga
     J_VALUES hanya menjadi fallback bila BOX_SECTIONS tidak memuat J.
 2. get_section_by_x memakai batas inklusif x1 <= x <= x2: pada x yang
    tepat di batas segmen, tipe segmen PERTAMA yang menang. Pipeline tidak
@@ -38,12 +38,12 @@ Pier: section fiber ada di repo terpisah (bukan di sini).
 
 # Nilai J (torsi) hasil warping analysis per tipe (m4), dipakai hanya
 # sebagai FALLBACK bila BOX_SECTIONS[tipe] tidak memuat "J" (lihat get_J).
-# CATATAN: BOX_SECTIONS saat ini memuat J = 4.0/3.8/4.0, sehingga nilai
+# CATATAN: BOX_SECTIONS saat ini memuat J = 3.8232/3.7533/3.1661, sehingga nilai
 # di bawah tidak terpakai. Perbedaan itu belum diselesaikan (audit).
 J_VALUES = {
     "solid":   3.8232,    # warping analysis
     "hollow":  3.7533,    # warping analysis (void drum)
-    "tumpuan": 3.1667,    # warping analysis; lebih kecil dari hollow,
+    "tumpuan": 3.1661,    # warping analysis; lebih kecil dari hollow,
                           # perlu dicek kewajarannya
 }
 

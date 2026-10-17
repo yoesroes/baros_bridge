@@ -55,6 +55,8 @@ def jalankan_pemeriksaan(hasil, kasus, elemen_result, bc_list,
         w_total = sum(float(w) * panjang.get(tag, 0.0)
                       for tag, w in k.get("ele", {}).items())
         p_total = sum(float(p) for p in k.get("node", {}).values())
+        p_total += sum(float(P) for daftar in k.get("pload", {}).values()
+                       for P, _ in daftar)      # KEL di dalam elemen
         total_hitung = w_total + p_total
         total_kasus = float(k.get("total", 0.0))
         scale_load = max(1.0, abs(total_hitung), abs(total_kasus))

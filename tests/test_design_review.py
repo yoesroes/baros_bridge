@@ -123,3 +123,62 @@ def test_sc13_mendeteksi_d2_yang_hilang():
         design_review.KONFIG_DEFAULT)
     assert t["status"] == "WARNING"
     assert "D2" in t["detail"]
+
+
+# ---------------- SC-18, SC-19, SC-20 ----------------
+def _pdata_salinan(**ubah):
+    import copy
+    import types
+    from project import project_data as pdata
+    d = {k: copy.deepcopy(v) for k, v in vars(pdata).items()
+         if not k.startswith("__")}
+    d.update(ubah)
+    return types.SimpleNamespace(**d)
+
+
+def test_sc18_data_referensi_konsisten_dan_mendeteksi_selisih():
+    k = design_review.KONFIG_DEFAULT
+    pd = _pdata_salinan()
+    assert design_review.sc18_data_referensi({"pdata": pd}, k)["status"] == \
+        "PASS"
+    salah = list(pd.SPANS)
+    n1, n2, L, kel = salah[0]
+    salah[0] = (n1, n2, L, 0.661)                      # meter, bukan persen
+    t = design_review.sc18_data_referensi(
+        {"pdata": _pdata_salinan(SPANS=salah)}, k)
+    assert t["status"] == "WARNING" and "A1-P1" in t["detail"]
+    info = dict(pd.INFO)
+    info["selisih_elevasi"] = 4.397                    # nama lama ambigu
+    t = design_review.sc18_data_referensi(
+        {"pdata": _pdata_salinan(INFO=info)}, k)
+    assert t["status"] == "WARNING" and "ambigu" in t["detail"]
+
+
+def test_sc19_diafragma_menandai_penempatan_tidak_seragam():
+    k = design_review.KONFIG_DEFAULT
+    t = design_review.sc19_diafragma({"pdata": _pdata_salinan()}, k)
+    assert t["status"] == "WARNING"
+    for nama in ("P3", "P8", "A2"):
+        assert nama in t["lokasi"]
+    sm = [(0.0, 10.0, "tumpuan"), (10.0, 20.0, "hollow")]
+    pd = _pdata_salinan(SECTION_MAP=sm, SUPPORTS={
+        "A1": {"x": 5.0, "y": 0.0, "type": "pier"}})
+    assert design_review.sc19_diafragma({"pdata": pd}, k)["status"] == "PASS"
+
+
+def test_sc20_dasar_faktor():
+    from core import loads
+    k = design_review.KONFIG_DEFAULT
+    ctx = {"pdata": _pdata_salinan(), "loads": loads}
+    assert design_review.sc20_dasar_faktor(ctx, k)["status"] == "NOT ASSESSED"
+    cocok = _pdata_salinan(
+        DASAR_REGULASI="uji",
+        KOMBINASI_REFERENSI={"Strength I": {"D1": 1.2, "D2": 2.0, "L": 1.8}})
+    assert design_review.sc20_dasar_faktor(
+        {"pdata": cocok, "loads": loads}, k)["status"] == "PASS"
+    beda = _pdata_salinan(
+        DASAR_REGULASI="uji",
+        KOMBINASI_REFERENSI={"Strength I": {"D1": 1.25, "D2": 1.5,
+                                            "L": 1.75}})
+    t = design_review.sc20_dasar_faktor({"pdata": beda, "loads": loads}, k)
+    assert t["status"] == "WARNING" and "Strength I D1" in t["detail"]

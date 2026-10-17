@@ -21,7 +21,13 @@ Catatan perubahan kode per tanggal. Format mengikuti [Keep a Changelog](https://
 
 **KEL (Beban Garis)**
 - Diperlakukan sebagai **beban terpusat (kN)**, bukan beban merata (kN/m).
-- P_KEL = 49 kN/m × lebar ekuivalen × (1 + FBD) = **497.35 kN**.
+- Untuk keputusan pemodelan proyek T2-01, KEL diterapkan pada seluruh
+  `ROAD_WIDTH = 9.00 m`; lebar 7.25 m di atas hanya berlaku untuk BTR.
+- Intensitas transversal setelah FBD = 49 kN/m × (1 + 0.4) = **68.6 kN/m**;
+  target total satu KEL = 68.6 × 9.00 = **617.40 kN**.
+- Penerapan lebar penuh adalah asumsi konservatif proyek untuk mengantisipasi
+  pembebanan, termasuk area sepeda dan sepeda motor; bukan kewajiban yang
+  dinyatakan oleh SNI 1725:2016 atau AASHTO.
 - FBD dihitung dari L_E = √(L_rata² · L_maks) = 29.4 m → FBD = 0.4.
 
 **Distribusi ke 5 Garis Memanjang**
@@ -135,7 +141,7 @@ python3 core/loads.py
 # 2. Cek distribusi
 #    Output harus menunjukkan:
 #    - w_BTR = 65.25 kN/m (bukan 81.0)
-#    - P_KEL = 497.35 kN (bukan 68.6 kN/m)
+#    - intensitas transversal KEL = 68.6 kN/m; P_KEL = 617.40 kN
 #    - Σ w_*_garis = w_total (tidak 5×)
 
 # 3. Cek confinement.py

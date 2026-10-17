@@ -17,7 +17,8 @@ Ketentuan yang dimodelkan:
 - BTR memakai lebar ekuivalen (5.5 m x 100% + sisa x 50%) dan faktor
   reduksi q untuk L > 30 m.
 - KEL adalah BEBAN TERPUSAT (kN), bukan beban merata (kN/m), dengan FBD
-  yang bergantung pada panjang bentang ekuivalen L_E.
+  yang bergantung pada panjang bentang ekuivalen L_E. KEL didistribusikan
+  penuh pada lebar jalan bersih, termasuk lajur motor/sepeda.
 - Semua beban dibagi ke garis memanjang grillage (z_garis) lewat lebar
   tributari, sehingga total beban terjaga (tidak terhitung 5x).
 - Elemen melintang TIDAK dibebani.
@@ -80,7 +81,7 @@ N_SISI = 2              # jumlah sisi barrier
 
 # Beban hidup (SNI 1725:2016 Pasal 8.3)
 Q_BTR = 9.0             # kPa, BTR untuk L <= 30 m
-P_KEL = 49.0            # kN/m per meter lebar transversal
+P_KEL = 49.0            # kN/m melintang, intensitas nominal BGT
 FBD = 0.4               # default FBD untuk L_E <= 50 m
 LEBAR_LAJUR_PENUH = 5.5 # m, lebar yang dibebani 100%
 L_BTR_BATAS = 30.0      # m, batas reduksi BTR
@@ -176,17 +177,20 @@ def hitung_w_btr(L=None, B=B_JALAN):
 def hitung_P_kel(L_E=None, B=B_JALAN):
     """
     KEL sebagai gaya terpusat (kN) untuk seluruh lebar lajur:
-    P = p * lebar_ekuivalen * (1 + FBD).
+    P = p * lebar jalan bersih * (1 + FBD).
+
+    Berbeda dari lebar ekuivalen BTR, seluruh lebar jalan menerima BGT
+    49 kN/m penuh sesuai asumsi pemodelan proyek.
     """
-    return P_KEL * lebar_ekuivalen(B) * (1.0 + hitung_fbd(L_E))
+    return P_KEL * B * (1.0 + hitung_fbd(L_E))
 
 
 def hitung_P_kel_per_lebar(L_E=None):
     """
     Intensitas KEL terhadap lebar transversal (sudah dengan FBD).
 
-    Satuan: kN per m lebar transversal; kalikan lebar efektif (m) untuk
-    mendapat gaya terpusat (kN).
+    Satuan: kN per m lebar transversal; kalikan lebar jalan yang diterapkan
+    (m) untuk mendapat gaya terpusat KEL (kN).
     """
     return P_KEL * (1.0 + hitung_fbd(L_E))
 
@@ -338,7 +342,9 @@ def hitung_beban_per_elemen(section_map, box_sections, z_garis=Z_GARIS,
     w_nonstruk_g = [w_nonstruk_m2 * b + wb
                     for b, wb in zip(b_jalan, w_barrier_g)]
     w_hidup_g = [q * b for b in b_hidup]
-    P_kel_g = [P_kel_per_lebar * b for b in b_hidup]
+    # BGT/KEL dibebankan penuh pada lebar jalan bersih; aturan lebar
+    # ekuivalen 5.5 m + 50% sisa hanya dipakai untuk BTR.
+    P_kel_g = [P_kel_per_lebar * b for b in b_jalan]
 
     elemen_data = []
     for i, (x1, x2, tipe) in enumerate(section_map):
@@ -550,7 +556,7 @@ def print_parameter(L_beban=None, L_E=None):
     print("  L_E           = {}".format(
         "-" if L_E is None else "{:.2f} m".format(L_E)))
     print("  FBD           = {:>8.3f}".format(hitung_fbd(L_E)))
-    print("  b ekuivalen   = {:>8.3f} m".format(lebar_ekuivalen()))
+    print("  b ekuivalen BTR = {:>8.3f} m".format(lebar_ekuivalen()))
     print()
     print("HASIL PERHITUNGAN:")
     print("  w aspal       = {:>8.2f} kN/m".format(hitung_w_aspal()))

@@ -191,7 +191,9 @@ def susun_laporan(d):
             ["BTR", analysis.DASAR_PANJANG["BTR"],
              "q (kPa) pada luas denah lajur; dikonversi ke per panjang "
              "sumbu dengan cos a"],
-            ["KEL", "nodal vertikal", "beban titik vertikal global pada node"]],
+            ["KEL", "titik vertikal", "beban garis lajur; nodal bila di stasiun, "
+             "beban titik di dalam elemen bila tidak; digeser tiap 0.1 panjang "
+             "bentang dan tepat di tumpuan"]],
         "widths": [3.2, 3.6, 10], "font": 8.5,
         "caption": "Tabel 2b. Dasar panjang dan orientasi beban. Semua beban "
                    "gravitasi diuraikan ke sumbu lokal (Wy = q cos a, "
@@ -247,7 +249,7 @@ def susun_laporan(d):
     B.append(("h1", "3. Integritas analisis"))
     inte = [t for t in temuan if t["id"] in
             ("SC-01", "SC-02", "SC-03", "SC-04", "SC-06", "SC-07", "SC-11",
-             "SC-13", "SC-16")]
+             "SC-13", "SC-16", "SC-17")]
     B.append(("table", {
         "header": ["ID", "Pemeriksaan", "Status", "Detail"],
         "rows": [[t["id"], t["nama"], t["status"], t["detail"]]
@@ -283,7 +285,9 @@ def susun_laporan(d):
                    "kiri penampang; torsi terhadap sumbu jembatan = sum[T - "
                    "z*V], kaidah tangan kanan). Nilai disampel tiap sekitar "
                    "1 m di dalam elemen agar puncak parabola momen "
-                   "tertangkap."))
+                   "tertangkap. KEL bergerak: dianalisis tiap 0.1 panjang "
+                   "bentang (dan tepat di tumpuan); momen negatif memakai "
+                   "KEL kedua pada bentang lain."))
     for g in d["gambar_gaya"]:
         B.append(("image", g[0], 17.0, g[1]))
     B.append(("table", {
@@ -488,10 +492,10 @@ def jalankan(out_dir=None, laporan_lama=True, penyusun="-"):
     live_btr = max((n for n, v in kasus.items() if v["jenis"] == "BTR"
                     and abs(v["offset"]) < 1e-9),
                    key=lambda n: abs(kasus[n]["total"]))
-    live_kel = max((n for n, v in kasus.items() if v["jenis"] == "KEL"
+    live_kel = min((n for n, v in kasus.items() if v["jenis"] == "KEL"
                     and abs(v["offset"]) < 1e-9
                     and v["bentang"] == kasus[live_btr]["bentang"]),
-                   key=lambda n: abs(kasus[n]["total"]))
+                   key=lambda n: abs((kasus[n]["f"] or 0.0) - 0.5))
     f = loads.KOMBINASI["Strength I"]
     komb = visualisasi.kombinasikan(eq, {"D1": f["D1"], "D2": f["D2"],
                                          live_btr: f["L"], live_kel: f["L"]})
